@@ -65,11 +65,11 @@ class TestBasicLoad(tests.GraphicsTest):
                                                "time_bound.grib2")))
         self.assertCML(cubes, ("grib_load", "time_bound_grib2.cml"))
 
-    @skip('iris-grib is currently causing errors')
+    # @skip('iris-grib is currently causing errors')
     def test_load_3_layer(self):
         cubes = iris.load(tests.get_data_path(('GRIB', "3_layer_viz",
                                                "3_layer.grib2")))
-        cubes = iris.cube.CubeList([cubes[1], cubes[0], cubes[2]])
+        cubes = iris.cube.CubeList([cubes[2], cubes[0], cubes[1]])
         self.assertCML(cubes, ("grib_load", "3_layer.cml"))
 
     def test_load_masked(self):
