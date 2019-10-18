@@ -102,7 +102,7 @@ install:
 
   # TODO : remove when iris doesn't do an integration test requiring iris-grib.
   - if [[ "${TEST_MINIMAL}" != true ]]; then
-        conda install --quiet -n ${ENV_NAME} eccodes;
+        conda install --quiet -n ${ENV_NAME} python-eccodes=0.9.3;
         conda install --quiet -n ${ENV_NAME} --no-deps iris-grib;
     fi
 
