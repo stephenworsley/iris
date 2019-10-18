@@ -69,9 +69,6 @@ class TestBasicLoad(tests.GraphicsTest):
     def test_load_3_layer(self):
         cubes = iris.load(tests.get_data_path(('GRIB', "3_layer_viz",
                                                "3_layer.grib2")))
-        _ = cubes[0].data
-        _ = cubes[1].data
-        _ = cubes[2].data
         cubes = iris.cube.CubeList([cubes[1], cubes[0], cubes[2]])
         self.assertCML(cubes, ("grib_load", "3_layer.cml"))
 
