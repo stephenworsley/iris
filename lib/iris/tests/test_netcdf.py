@@ -290,7 +290,7 @@ class TestNetCDFLoad(tests.IrisTest):
             np.ma.array([11.0, 12.0, 13.0]),
             long_name="refs",
             var_name="my_av",
-            units="unknown",
+            units="1",
             attributes={"custom": "extra-attribute"},
         )
         self.assertEqual(avs[0], expected)
