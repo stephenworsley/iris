@@ -265,7 +265,6 @@ class TestNetCDFLoad(tests.IrisTest):
                     axv:units = "1" ;
                     axv:long_name = "x" ;
                 double my_av(axv) ;
-                    my_av:units = "1" ;
                     my_av:long_name = "refs" ;
                     my_av:custom = "extra-attribute";
             data:
@@ -291,7 +290,7 @@ class TestNetCDFLoad(tests.IrisTest):
             np.ma.array([11.0, 12.0, 13.0]),
             long_name="refs",
             var_name="my_av",
-            units="1",
+            units="unknown",
             attributes={"custom": "extra-attribute"},
         )
         self.assertEqual(avs[0], expected)
