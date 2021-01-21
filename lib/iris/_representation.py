@@ -101,7 +101,7 @@ class VectorSummary(CoordSummary):
             "x" if dim in dims else "-" for dim in range(len(cube.shape))
         ]
         if iscoord:
-            extra = self._summary_coord_extra()
+            extra = self._summary_coord_extra(cube, vector)
             self.extra = iris.util.clip_string(
                 extra, clip_length=70 - extra_indent
             )
@@ -110,7 +110,7 @@ class VectorSummary(CoordSummary):
 
 
 class ScalarSummary(CoordSummary):
-    def __init__(self, coord):
+    def __init__(self, cube, coord):
         extra_indent = 13
         self.name = coord.name()
         if (
@@ -144,7 +144,7 @@ class ScalarSummary(CoordSummary):
             self.content = "{}{}, bound={}{}".format(
                 self.point, self.unit, self.bound, self.unit
             )
-        extra = self._summary_coord_extra()
+        extra = self._summary_coord_extra(cube, coord)
         self.extra = iris.util.clip_string(
             extra, clip_length=70 - extra_indent
         )
@@ -158,13 +158,15 @@ class Section:
 class VectorSection(Section):
     def __init__(self, title, cube, vectors, iscoord):
         self.title = title
-        self.contents = [VectorSummary(vector, cube, iscoord) for vector in vectors]
+        self.contents = [
+            VectorSummary(cube, vector, iscoord) for vector in vectors
+        ]
 
 
 class ScalarSection(Section):
-    def __init__(self, title, scalars):
+    def __init__(self, title, cube, scalars):
         self.title = title
-        self.contents = [ScalarSummary(scalar) for scalar in scalars]
+        self.contents = [ScalarSummary(cube, scalar) for scalar in scalars]
 
 
 class ScalarCMSection(Section):
@@ -253,31 +255,42 @@ class CubeSummary:
             cm for cm in cube.cell_measures() if cm.shape == (1,)
         ]
 
-        self.dim_coord_section = VectorSection(
-            "Dimension coordinates:", cube, vector_dim_coords, True
-        )
-        self.aux_coord_section = VectorSection(
-            "Auxiliary coordinates:", cube, vector_aux_coords, True
-        )
-        self.derived_coord_section = VectorSection(
-            "Derived coordinates:", cube, vector_derived_coords, True
-        )
-        self.cell_measure_section = VectorSection(
-            "Cell Measures:", cube, vector_cell_measures, False
-        )
-        self.ancillary_variable_section = VectorSection(
-            "Ancillary variables:", cube, vector_ancillary_variables, False
+        self.vector_sections = {}
+
+        def add_vector_section(title, contents, iscoord=True):
+            self.vector_sections[title] = VectorSection(
+                title, cube, contents, iscoord
+            )
+
+        add_vector_section("Dimension coordinates:", vector_dim_coords)
+        add_vector_section("Auxiliary coordinates:", vector_aux_coords)
+        add_vector_section("Derived coordinates:", vector_derived_coords)
+        add_vector_section("Cell Measures:", vector_cell_measures, False)
+        add_vector_section(
+            "Ancillary Variables:", vector_ancillary_variables, False
         )
 
-        self.scalar_section = ScalarSection(
-            "Scalar Coordinates:", scalar_coords
+        self.scalar_sections = {}
+
+        def add_scalar_section(section_class, title, *args):
+            self.scalar_sections[title] = section_class(title, *args)
+
+        add_scalar_section(
+            ScalarSection, "Scalar Coordinates:", cube, scalar_coords
         )
-        self.scalar_cm_section = ScalarCMSection(
-            "Scalar cell measures:", scalar_cell_measures
+        add_scalar_section(
+            ScalarCMSection, "Scalar cell measures:", scalar_cell_measures
         )
-        self.attribute_section = AttributeSection(
-            "Attributes:", cube.attributes
+        add_scalar_section(AttributeSection, "Attributes:", cube.attributes)
+        add_scalar_section(
+            CellMethodSection, "Cell methods:", cube.cell_methods
         )
-        self.cell_method_section = CellMethodSection(
-            "Cell methods:", cube.cell_methods
-        )
+
+
+if __name__ == "__main__":
+    # Really simple tests
+    import iris.tests.stock as istk
+
+    cube = istk.realistic_3d()
+    summ = CubeSummary(cube)
+    print(summ)
