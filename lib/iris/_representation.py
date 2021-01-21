@@ -25,7 +25,7 @@ def sorted_axes(axes):
 
 class DimensionHeader:
     def __init__(self, cube):
-        if cube.shape() == ():
+        if cube.shape == ():
             self.scalar = True
             self.dim_names = []
             self.shape = []
