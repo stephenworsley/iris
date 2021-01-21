@@ -271,7 +271,7 @@ class CubeSummary:
             "Ancillary variables:", vector_ancillary_variables
         )
 
-        self.scalar_section = ScalarSummary(
+        self.scalar_section = ScalarSection(
             "Scalar Coordinates:", scalar_coords
         )
         self.scalar_cm_section = ScalarCMSection(
