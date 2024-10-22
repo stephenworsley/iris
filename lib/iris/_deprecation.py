@@ -1,40 +1,25 @@
-# (C) British Crown Copyright 2010 - 2016, Met Office
+# Copyright Iris contributors
 #
-# This file is part of Iris.
-#
-# Iris is free software: you can redistribute it and/or modify it under
-# the terms of the GNU Lesser General Public License as published by the
-# Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# Iris is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU Lesser General Public License for more details.
-#
-# You should have received a copy of the GNU Lesser General Public License
-# along with Iris.  If not, see <http://www.gnu.org/licenses/>.
-"""
-Utilities for producing runtime deprecation messages.
-
-"""
-from __future__ import (absolute_import, division, print_function)
-from six.moves import (filter, input, map, range, zip)  # noqa
-import six
+# This file is part of Iris and is released under the BSD license.
+# See LICENSE in the root of the repository for full licensing details.
+"""Utilities for producing runtime deprecation messages."""
 
 import warnings
 
-from iris.exceptions import IrisError
-
 
 class IrisDeprecation(UserWarning):
-    """An Iris deprecation warning."""
+    """An Iris deprecation warning.
+
+    Note this subclasses UserWarning for backwards compatibility with Iris'
+    original deprecation warnings. Should subclass DeprecationWarning at the
+    next major release.
+    """
+
     pass
 
 
 def warn_deprecated(msg, stacklevel=2):
-    """
-    Issue an Iris deprecation warning.
+    """Issue an Iris deprecation warning.
 
     Calls :func:`warnings.warn', to emit the message 'msg' as a
     :class:`warnings.warning`, of the subclass :class:`IrisDeprecationWarning`.
@@ -59,7 +44,7 @@ def warn_deprecated(msg, stacklevel=2):
         >>>
 
     """
-    warnings.warn(msg, IrisDeprecation, stacklevel=stacklevel)
+    warnings.warn(msg, category=IrisDeprecation, stacklevel=stacklevel)
 
 
 # A Mixin for a wrapper class that copies the docstring of the wrapped class
@@ -74,8 +59,7 @@ class ClassWrapperSameDocstring(type):
         parent_class = bases[0]
 
         # Copy the original class docstring.
-        class_dict['__doc__'] = parent_class.__doc__
+        class_dict["__doc__"] = parent_class.__doc__
 
         # Return the result.
-        return super(ClassWrapperSameDocstring, metacls).__new__(
-            metacls, classname, bases, class_dict)
+        return super().__new__(metacls, classname, bases, class_dict)

@@ -1,30 +1,14 @@
-# (C) British Crown Copyright 2015 - 2017, Met Office
+# Copyright Iris contributors
 #
-# This file is part of Iris.
-#
-# Iris is free software: you can redistribute it and/or modify it under
-# the terms of the GNU Lesser General Public License as published by the
-# Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# Iris is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU Lesser General Public License for more details.
-#
-# You should have received a copy of the GNU Lesser General Public License
-# along with Iris.  If not, see <http://www.gnu.org/licenses/>.
-"""
-Unit tests for `iris.aux_factory.AuxCoordFactory`.
-
-"""
-
-from __future__ import (absolute_import, division, print_function)
-from six.moves import (filter, input, map, range, zip)  # noqa
+# This file is part of Iris and is released under the BSD license.
+# See LICENSE in the root of the repository for full licensing details.
+"""Unit tests for `iris.aux_factory.AuxCoordFactory`."""
 
 # Import iris.tests first so that some things can be initialised before
 # importing anything else.
-import iris.tests as tests
+import iris.tests as tests  # isort:skip
+
+from unittest import mock
 
 import numpy as np
 
@@ -154,9 +138,10 @@ class Test__nd_bounds(tests.IrisTest):
 @tests.skip_data
 class Test_lazy_aux_coords(tests.IrisTest):
     def setUp(self):
-        path = tests.get_data_path(['NetCDF', 'testing',
-                                    'small_theta_colpex.nc'])
-        self.cube = iris.load_cube(path, 'air_potential_temperature')
+        path = tests.get_data_path(["NetCDF", "testing", "small_theta_colpex.nc"])
+        # While loading, "turn off" loading small variables as real data.
+        with mock.patch("iris.fileformats.netcdf.loader._LAZYVAR_MIN_BYTES", 0):
+            self.cube = iris.load_cube(path, "air_potential_temperature")
 
     def _check_lazy(self):
         coords = self.cube.aux_coords + self.cube.derived_coords
@@ -175,5 +160,5 @@ class Test_lazy_aux_coords(tests.IrisTest):
         self._check_lazy()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     tests.main()

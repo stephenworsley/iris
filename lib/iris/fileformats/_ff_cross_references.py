@@ -1,32 +1,14 @@
-# (C) British Crown Copyright 2013 - 2015, Met Office
+# Copyright Iris contributors
 #
-# This file is part of Iris.
-#
-# Iris is free software: you can redistribute it and/or modify it under
-# the terms of the GNU Lesser General Public License as published by the
-# Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# Iris is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU Lesser General Public License for more details.
-#
-# You should have received a copy of the GNU Lesser General Public License
-# along with Iris.  If not, see <http://www.gnu.org/licenses/>.
-#
-# DO NOT EDIT: AUTO-GENERATED
-"""
-Auto-generated from iris/tools/gen_stash_refs.py
-Relates grid code and field code to the stash code.
+# This file is part of Iris and is released under the BSD license.
+# See LICENSE in the root of the repository for full licensing details.
+"""Table providing UM grid-code, field-code and pseudolevel-type for (some) stash codes.
+
+Used in UM file i/o.
 
 """
-
-from __future__ import (absolute_import, division, print_function)
-from six.moves import (filter, input, map, range, zip)  # noqa
 
 from collections import namedtuple
-
 
 Stash = namedtuple('Stash', 'grid_code field_code pseudo_level_type')
 

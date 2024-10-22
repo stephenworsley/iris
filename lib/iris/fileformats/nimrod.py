@@ -1,103 +1,184 @@
-# (C) British Crown Copyright 2010 - 2015, Met Office
+# Copyright Iris contributors
 #
-# This file is part of Iris.
-#
-# Iris is free software: you can redistribute it and/or modify it under
-# the terms of the GNU Lesser General Public License as published by the
-# Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# Iris is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU Lesser General Public License for more details.
-#
-# You should have received a copy of the GNU Lesser General Public License
-# along with Iris.  If not, see <http://www.gnu.org/licenses/>.
+# This file is part of Iris and is released under the BSD license.
+# See LICENSE in the root of the repository for full licensing details.
 """Provides NIMROD file format capabilities."""
 
-from __future__ import (absolute_import, division, print_function)
-from six.moves import (filter, input, map, range, zip)  # noqa
-import six
-
 import glob
-import numpy as np
 import os
 import struct
 import sys
+
+import numpy as np
 
 import iris
 from iris.exceptions import TranslationError
 import iris.fileformats.nimrod_load_rules
 
+# general header (int16) elements 1-31 (Fortran bytes 1-62)
+general_header_int16s = (
+    "vt_year",
+    "vt_month",
+    "vt_day",
+    "vt_hour",
+    "vt_minute",
+    "vt_second",
+    "dt_year",
+    "dt_month",
+    "dt_day",
+    "dt_hour",
+    "dt_minute",
+    "datum_type",
+    "datum_len",
+    "experiment_num",
+    "horizontal_grid_type",
+    "num_rows",
+    "num_cols",
+    "nimrod_version",
+    "field_code",
+    "vertical_coord_type",
+    "reference_vertical_coord_type",
+    "data_specific_float32_len",
+    "data_specific_int16_len",
+    "origin_corner",
+    "int_mdi",
+    "period_minutes",
+    "num_model_levels",
+    "proj_biaxial_ellipsoid",
+    "ensemble_member",
+    "model_origin_id",
+    "averagingtype",
+)
 
-# general header (int16) elements
-general_header_int16s = ("vt_year", "vt_month", "vt_day", "vt_hour",
-                         "vt_minute", "vt_second", "dt_year", "dt_month",
-                         "dt_day", "dt_hour", "dt_minute", "datum_type",
-                         "datum_len", "experiment_num", "horizontal_grid_type",
-                         "num_rows", "num_cols", "nimrod_version",
-                         "field_code", "vertical_coord_type",
-                         "reference_vertical_coord_type",
-                         "data_specific_float32_len",
-                         "data_specific_int16_len",
-                         "origin_corner", "int_mdi", "period_minutes",
-                         "num_model_levels", "proj_biaxial_ellipsoid",
-                         "ensemble_member", "spare1", "spare2")
+
+# general header (float32) elements 32-59 (Fortran bytes 63-174)
+general_header_float32s = (
+    "vertical_coord",
+    "reference_vertical_coord",
+    "y_origin",
+    "row_step",
+    "x_origin",
+    "column_step",
+    "float32_mdi",
+    "MKS_data_scaling",
+    "data_offset",
+    "x_offset",
+    "y_offset",
+    "true_origin_latitude",
+    "true_origin_longitude",
+    "true_origin_easting",
+    "true_origin_northing",
+    "tm_meridian_scaling",
+    "threshold_value_alt",
+    "threshold_value",
+)
 
 
-# general header (float32) elements
-general_header_float32s = ("vertical_coord", "reference_vertical_coord",
-                           "y_origin", "row_step", "x_origin", "column_step",
-                           "float32_mdi", "MKS_data_scaling", "data_offset",
-                           "x_offset", "y_offset", "true_origin_latitude",
-                           "true_origin_longitude", "true_origin_easting",
-                           "true_origin_northing", "tm_meridian_scaling")
+# data specific header (float32) elements 60-104 (Fortran bytes 175-354)
+data_header_float32s = (
+    "tl_y",
+    "tl_x",
+    "tr_y",
+    "tr_x",
+    "br_y",
+    "br_x",
+    "bl_y",
+    "bl_x",
+    "sat_calib",
+    "sat_space_count",
+    "ducting_index",
+    "elevation_angle",
+    "neighbourhood_radius",
+    "threshold_vicinity_radius",
+    "recursive_filter_alpha",
+    "threshold_fuzziness",
+    "threshold_duration_fuzziness",
+)
 
 
-# data specific header (float32) elements
-data_header_float32s = ("tl_y", "tl_x", "tr_y", "ty_x", "br_y", "br_x", "bl_y",
-                        "bl_x", "sat_calib", "sat_space_count",
-                        "ducting_index", "elevation_angle")
+# data specific header (char) elements 105-107 (bytes 355-410)
+# units, source and title
 
 
-# data specific header (int16) elements
-data_header_int16s = ("radar_num", "radars_bitmask", "more_radars_bitmask",
-                      "clutter_map_num", "calibration_type",
-                      "bright_band_height", "bright_band_intensity",
-                      "bright_band_test1", "bright_band_test2", "infill_flag",
-                      "stop_elevation", "int16_vertical_coord",
-                      "int16_reference_vertical_coord", "int16_y_origin",
-                      "int16_row_step", "int16_x_origin", "int16_column_step",
-                      "int16_float32_mdi", "int16_data_scaling",
-                      "int16_data_offset", "int16_x_offset", "int16_y_offset",
-                      "int16_true_origin_latitude",
-                      "int16_true_origin_longitude", "int16_tl_y",
-                      "int16_tl_x", "int16_tr_y", "int16_ty_x", "int16_br_y",
-                      "int16_br_x", "int16_bl_y", "int16_bl_x", "sensor_id",
-                      "meteosat_id", "alphas_available")
+# data specific header (int16) elements 108-159 (Fortran bytes 411-512)
+data_header_int16s = (
+    "threshold_type",
+    "probability_method",
+    "recursive_filter_iterations",
+    "member_count",
+    "probability_period_of_event",
+    "data_header_int16_05",
+    "soil_type",
+    "radiation_code",
+    "data_header_int16_08",
+    "data_header_int16_09",
+    "data_header_int16_10",
+    "data_header_int16_11",
+    "data_header_int16_12",
+    "data_header_int16_13",
+    "data_header_int16_14",
+    "data_header_int16_15",
+    "data_header_int16_16",
+    "data_header_int16_17",
+    "data_header_int16_18",
+    "data_header_int16_19",
+    "data_header_int16_20",
+    "data_header_int16_21",
+    "data_header_int16_22",
+    "data_header_int16_23",
+    "data_header_int16_24",
+    "data_header_int16_25",
+    "data_header_int16_26",
+    "data_header_int16_27",
+    "data_header_int16_28",
+    "data_header_int16_29",
+    "data_header_int16_30",
+    "data_header_int16_31",
+    "data_header_int16_32",
+    "data_header_int16_33",
+    "data_header_int16_34",
+    "data_header_int16_35",
+    "data_header_int16_36",
+    "data_header_int16_37",
+    "data_header_int16_38",
+    "data_header_int16_39",
+    "data_header_int16_40",
+    "data_header_int16_41",
+    "data_header_int16_42",
+    "data_header_int16_43",
+    "data_header_int16_44",
+    "data_header_int16_45",
+    "data_header_int16_46",
+    "data_header_int16_47",
+    "data_header_int16_48",
+    "data_header_int16_49",
+    "period_seconds",
+)
 
 
 def _read_chars(infile, num):
     """Read characters from the (big-endian) file."""
     instr = infile.read(num)
     result = struct.unpack(">%ds" % num, instr)[0]
-    if six.PY3:
-        # For Python 3, convert raw bytes into a string.
-        result = result.decode()
+    result = result.decode()
     return result
 
 
-class NimrodField(object):
-    """
-    A data field from a NIMROD file.
+class NimrodField:
+    """A data field from a NIMROD file.
 
     Capable of converting itself into a :class:`~iris.cube.Cube`
 
+    References
+    ----------
+    Met Office (2003): Met Office Rain Radar Data from the NIMROD System.
+    NCAS British Atmospheric Data Centre, date of citation.
+    https://catalogue.ceda.ac.uk/uuid/82adec1f896af6169112d09cc1174499
+
     """
+
     def __init__(self, from_file=None):
-        """
-        Create a NimrodField object and optionally read from an open file.
+        """Create a NimrodField object and optionally read from an open file.
 
         Example::
 
@@ -123,7 +204,6 @@ class NimrodField(object):
 
     def _read_header(self, infile):
         """Load the 512 byte header (surrounded by 4-byte length)."""
-
         leading_length = struct.unpack(">L", infile.read(4))[0]
         if leading_length != 512:
             raise TranslationError("Expected header leading_length of 512")
@@ -153,13 +233,14 @@ class NimrodField(object):
 
         trailing_length = struct.unpack(">L", infile.read(4))[0]
         if trailing_length != leading_length:
-            raise TranslationError('Expected header trailing_length of {}, '
-                                   'got {}.'.format(leading_length,
-                                                    trailing_length))
+            raise TranslationError(
+                "Expected header trailing_length of {}, got {}.".format(
+                    leading_length, trailing_length
+                )
+            )
 
     def _read_data(self, infile):
-        """
-        Read the data array: int8, int16, int32 or float32
+        """Read the data array: int8, int16, int32 or float32.
 
         (surrounded by 4-byte length, at start and end)
 
@@ -181,8 +262,7 @@ class NimrodField(object):
             elif self.datum_len == 4:
                 numpy_dtype = np.int32
             else:
-                raise TranslationError("Undefined datum length "
-                                       "%d" % self.datum_type)
+                raise TranslationError("Undefined datum length %d" % self.datum_type)
         # 2:byte
         elif self.datum_type == 2:
             numpy_dtype = np.byte
@@ -190,12 +270,10 @@ class NimrodField(object):
             raise TranslationError("Undefined data type")
         leading_length = struct.unpack(">L", infile.read(4))[0]
         if leading_length != num_data_bytes:
-            raise TranslationError("Expected data leading_length of %d" %
-                                   num_data_bytes)
+            raise TranslationError(
+                "Expected data leading_length of %d" % num_data_bytes
+            )
 
-        # TODO: Deal appropriately with MDI. Can't just create masked arrays
-        #       as cube merge converts masked arrays with no masks to ndarrays,
-        #       thus mergable cube can split one mergable cube into two.
         self.data = np.fromfile(infile, dtype=numpy_dtype, count=num_data)
 
         if sys.byteorder == "little":
@@ -203,32 +281,30 @@ class NimrodField(object):
 
         trailing_length = struct.unpack(">L", infile.read(4))[0]
         if trailing_length != leading_length:
-            raise TranslationError("Expected data trailing_length of %d" %
-                                   num_data_bytes)
+            raise TranslationError(
+                "Expected data trailing_length of %d" % num_data_bytes
+            )
 
         # Form the correct shape.
         self.data = self.data.reshape(self.num_rows, self.num_cols)
 
 
 def load_cubes(filenames, callback=None):
-    """
-    Loads cubes from a list of NIMROD filenames.
+    """Load cubes from a list of NIMROD filenames.
 
-    Args:
+    Parameters
+    ----------
+    filenames :
+        List of NIMROD filenames to load.
+    callback : optional
+        A function which can be passed on to :func:`iris.io.run_callback`.
 
-    * filenames - list of NIMROD filenames to load
-
-    Kwargs:
-
-    * callback - a function which can be passed on to
-                 :func:`iris.io.run_callback`
-
-    .. note::
-
-        The resultant cubes may not be in the same order as in the files.
+    Notes
+    -----
+    The resultant cubes may not be in the same order as in the files.
 
     """
-    if isinstance(filenames, six.string_types):
+    if isinstance(filenames, str):
         filenames = [filenames]
 
     for filename in filenames:
@@ -245,10 +321,7 @@ def load_cubes(filenames, callback=None):
 
                     # Were we given a callback?
                     if callback is not None:
-                        cube = iris.io.run_callback(callback,
-                                                    cube,
-                                                    field,
-                                                    filename)
+                        cube = iris.io.run_callback(callback, cube, field, filename)
                     if cube is None:
                         continue
 

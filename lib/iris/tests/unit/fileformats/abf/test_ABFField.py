@@ -1,34 +1,19 @@
-# (C) British Crown Copyright 2013 - 2019, Met Office
+# Copyright Iris contributors
 #
-# This file is part of Iris.
-#
-# Iris is free software: you can redistribute it and/or modify it under
-# the terms of the GNU Lesser General Public License as published by the
-# Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# Iris is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU Lesser General Public License for more details.
-#
-# You should have received a copy of the GNU Lesser General Public License
-# along with Iris.  If not, see <http://www.gnu.org/licenses/>.
+# This file is part of Iris and is released under the BSD license.
+# See LICENSE in the root of the repository for full licensing details.
 """Unit tests for the `iris.fileformats.abf.ABFField` class."""
-
-from __future__ import (absolute_import, division, print_function)
-from six.moves import (filter, input, map, range, zip)  # noqa
 
 # Import iris.tests first so that some things can be initialised before
 # importing anything else.
-import iris.tests as tests
+import iris.tests as tests  # isort:skip
 
 from unittest import mock
 
 from iris.fileformats.abf import ABFField
 
 
-class MethodCounter(object):
+class MethodCounter:
     def __init__(self, method_name):
         self.method_name = method_name
         self.count = 0
@@ -50,15 +35,15 @@ class MethodCounter(object):
 
 class Test_data(tests.IrisTest):
     def test_single_read(self):
-        path = '0000000000000000jan00000'
+        path = "0000000000000000jan00000"
         field = ABFField(path)
 
-        with mock.patch('iris.fileformats.abf.np.fromfile') as fromfile:
-            with MethodCounter('__getattr__') as getattr:
-                with MethodCounter('_read') as read:
+        with mock.patch("iris.fileformats.abf.np.fromfile") as fromfile:
+            with MethodCounter("__getattr__") as getattr:
+                with MethodCounter("_read") as read:
                     field.data
 
-        fromfile.assert_called_once_with(path, dtype='>u1')
+        fromfile.assert_called_once_with(path, dtype=">u1")
         self.assertEqual(getattr.count, 1)
         self.assertEqual(read.count, 1)
 

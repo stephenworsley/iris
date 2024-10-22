@@ -1,51 +1,41 @@
-# (C) British Crown Copyright 2015 - 2019, Met Office
+# Copyright Iris contributors
 #
-# This file is part of Iris.
-#
-# Iris is free software: you can redistribute it and/or modify it under
-# the terms of the GNU Lesser General Public License as published by the
-# Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# Iris is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU Lesser General Public License for more details.
-#
-# You should have received a copy of the GNU Lesser General Public License
-# along with Iris.  If not, see <http://www.gnu.org/licenses/>.
+# This file is part of Iris and is released under the BSD license.
+# See LICENSE in the root of the repository for full licensing details.
 """Unit tests for the :class:`iris.coords.CellMeasure` class."""
-
-from __future__ import (absolute_import, division, print_function)
-from six.moves import (filter, input, map, range, zip)  # noqa
 
 # Import iris.tests first so that some things can be initialised before
 # importing anything else.
-import iris.tests as tests
+import iris.tests as tests  # isort:skip
+
+from unittest import mock
 
 import numpy as np
 
-from iris.coords import CellMeasure
 from iris._lazy_data import as_lazy_data
+from iris.coords import CellMeasure
+from iris.cube import Cube
 
 
 class Tests(tests.IrisTest):
     def setUp(self):
-        self.values = np.array((10., 12., 16., 9.))
-        self.measure = CellMeasure(self.values, units='m^2',
-                                   standard_name='cell_area',
-                                   long_name='measured_area',
-                                   var_name='area',
-                                   attributes={'notes': '1m accuracy'},
-                                   measure='area')
+        self.values = np.array((10.0, 12.0, 16.0, 9.0))
+        self.measure = CellMeasure(
+            self.values,
+            units="m^2",
+            standard_name="cell_area",
+            long_name="measured_area",
+            var_name="area",
+            attributes={"notes": "1m accuracy"},
+        )
 
     def test_invalid_measure(self):
-        msg = "measure must be 'area' or 'volume', not length"
-        with self.assertRaisesRegexp(ValueError, msg):
-            self.measure.measure = 'length'
+        msg = "measure must be 'area' or 'volume', got 'length'"
+        with self.assertRaisesRegex(ValueError, msg):
+            self.measure.measure = "length"
 
     def test_set_measure(self):
-        v = 'volume'
+        v = "volume"
         self.measure.measure = v
         self.assertEqual(self.measure.measure, v)
 
@@ -53,7 +43,7 @@ class Tests(tests.IrisTest):
         self.assertArrayEqual(self.measure.data, self.values)
 
     def test_set_data(self):
-        new_vals = np.array((1., 2., 3., 4.))
+        new_vals = np.array((1.0, 2.0, 3.0, 4.0))
         self.measure.data = new_vals
         self.assertArrayEqual(self.measure.data, new_vals)
 
@@ -68,14 +58,14 @@ class Tests(tests.IrisTest):
         self.assertArrayEqual(self.measure.data, new_vals)
 
     def test_set_data__lazy(self):
-        new_vals = as_lazy_data(np.array((1., 2., 3., 4.)))
+        new_vals = as_lazy_data(np.array((1.0, 2.0, 3.0, 4.0)))
         self.measure.data = new_vals
         self.assertArrayEqual(self.measure.data, new_vals)
 
     def test_data_different_shape(self):
-        new_vals = np.array((1., 2., 3.))
-        msg = 'New data shape must match existing data shape.'
-        with self.assertRaisesRegexp(ValueError, msg):
+        new_vals = np.array((1.0, 2.0, 3.0))
+        msg = "Require data with shape."
+        with self.assertRaisesRegex(ValueError, msg):
             self.measure.data = new_vals
 
     def test_shape(self):
@@ -98,31 +88,47 @@ class Tests(tests.IrisTest):
         self.assertArrayEqual(sub_measure.data, old_values)
 
     def test_copy(self):
-        new_vals = np.array((7., 8.))
+        new_vals = np.array((7.0, 8.0))
         copy_measure = self.measure.copy(new_vals)
         self.assertArrayEqual(copy_measure.data, new_vals)
 
-    def test_repr_other_metadata(self):
-        expected = (", long_name='measured_area', "
-                    "var_name='area', attributes={'notes': '1m accuracy'}")
-        self.assertEqual(self.measure._repr_other_metadata(), expected)
-
-    def test__str__(self):
-        expected = ("CellMeasure(array([10., 12., 16.,  9.]), "
-                    "measure=area, standard_name='cell_area', "
-                    "units=Unit('m^2'), long_name='measured_area', "
-                    "var_name='area', attributes={'notes': '1m accuracy'})")
+    def test___str__(self):
+        expected = "\n".join(
+            [
+                "CellMeasure :  cell_area / (m^2)",
+                "    data: [10., 12., 16.,  9.]",
+                "    shape: (4,)",
+                "    dtype: float64",
+                "    standard_name: 'cell_area'",
+                "    long_name: 'measured_area'",
+                "    var_name: 'area'",
+                "    attributes:",
+                "        notes  '1m accuracy'",
+                "    measure: 'area'",
+            ]
+        )
         self.assertEqual(self.measure.__str__(), expected)
 
-    def test__repr__(self):
-        expected = ("CellMeasure(array([10., 12., 16.,  9.]), "
-                    "measure=area, standard_name='cell_area', "
-                    "units=Unit('m^2'), long_name='measured_area', "
-                    "var_name='area', attributes={'notes': '1m accuracy'})")
-        self.assertEqual(self.measure.__repr__(), expected)
+    def test___repr__(self):
+        expected = "<CellMeasure: cell_area / (m^2)  [10., 12., 16., 9.]  shape(4,)>"
+        self.assertEqual(expected, self.measure.__repr__())
 
     def test__eq__(self):
         self.assertEqual(self.measure, self.measure)
 
-if __name__ == '__main__':
+
+class Test_cube_dims(tests.IrisTest):
+    def test(self):
+        # Check that "coord.cube_dims(cube)" calls "cube.coord_dims(coord)".
+        mock_dims_result = mock.sentinel.CM_DIMS
+        mock_dims_call = mock.Mock(return_value=mock_dims_result)
+        mock_cube = mock.Mock(Cube, cell_measure_dims=mock_dims_call)
+        test_cm = CellMeasure([1], long_name="test_name")
+
+        result = test_cm.cube_dims(mock_cube)
+        self.assertEqual(result, mock_dims_result)
+        self.assertEqual(mock_dims_call.call_args_list, [mock.call(test_cm)])
+
+
+if __name__ == "__main__":
     tests.main()

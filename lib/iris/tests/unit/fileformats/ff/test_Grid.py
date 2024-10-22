@@ -1,27 +1,12 @@
-# (C) British Crown Copyright 2013 - 2019, Met Office
+# Copyright Iris contributors
 #
-# This file is part of Iris.
-#
-# Iris is free software: you can redistribute it and/or modify it under
-# the terms of the GNU Lesser General Public License as published by the
-# Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# Iris is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU Lesser General Public License for more details.
-#
-# You should have received a copy of the GNU Lesser General Public License
-# along with Iris.  If not, see <http://www.gnu.org/licenses/>.
+# This file is part of Iris and is released under the BSD license.
+# See LICENSE in the root of the repository for full licensing details.
 """Unit tests for :class:`iris.fileformat.ff.Grid`."""
-
-from __future__ import (absolute_import, division, print_function)
-from six.moves import (filter, input, map, range, zip)  # noqa
 
 # Import iris.tests first so that some things can be initialised before
 # importing anything else.
-import iris.tests as tests
+import iris.tests as tests  # isort:skip
 
 from unittest import mock
 
@@ -32,11 +17,20 @@ class Test___init__(tests.IrisTest):
     def test_attributes(self):
         # Ensure the constructor initialises all the grid's attributes
         # correctly, including unpacking values from the REAL constants.
-        reals = (mock.sentinel.ew, mock.sentinel.ns,
-                 mock.sentinel.first_lat, mock.sentinel.first_lon,
-                 mock.sentinel.pole_lat, mock.sentinel.pole_lon)
-        grid = Grid(mock.sentinel.column, mock.sentinel.row, reals,
-                    mock.sentinel.horiz_grid_type)
+        reals = (
+            mock.sentinel.ew,
+            mock.sentinel.ns,
+            mock.sentinel.first_lat,
+            mock.sentinel.first_lon,
+            mock.sentinel.pole_lat,
+            mock.sentinel.pole_lon,
+        )
+        grid = Grid(
+            mock.sentinel.column,
+            mock.sentinel.row,
+            reals,
+            mock.sentinel.horiz_grid_type,
+        )
         self.assertIs(grid.column_dependent_constants, mock.sentinel.column)
         self.assertIs(grid.row_dependent_constants, mock.sentinel.row)
         self.assertIs(grid.ew_spacing, mock.sentinel.ew)
@@ -57,7 +51,6 @@ class Test_vectors(tests.IrisTest):
 
     def _test_subgrid_vectors(self, subgrid, expected):
         grid = Grid(None, None, (None,) * 6, None)
-        dummy_vectors = (self.xp, self.yp, self.xu, self.yv)
         grid._x_vectors = mock.Mock(return_value=(self.xp, self.xu))
         grid._y_vectors = mock.Mock(return_value=(self.yp, self.yv))
         result = grid.vectors(subgrid)

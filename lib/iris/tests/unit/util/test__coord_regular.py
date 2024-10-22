@@ -1,21 +1,9 @@
-# (C) British Crown Copyright 2017, Met Office
+# Copyright Iris contributors
 #
-# This file is part of Iris.
-#
-# Iris is free software: you can redistribute it and/or modify it under
-# the terms of the GNU Lesser General Public License as published by the
-# Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# Iris is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU Lesser General Public License for more details.
-#
-# You should have received a copy of the GNU Lesser General Public License
-# along with Iris.  If not, see <http://www.gnu.org/licenses/>.
-"""
-Test elements of :mod:`iris.util` that deal with checking coord regularity.
+# This file is part of Iris and is released under the BSD license.
+# See LICENSE in the root of the repository for full licensing details.
+"""Test elements of :mod:`iris.util` that deal with checking coord regularity.
+
 Specifically, this module tests the following functions:
 
   * :func:`iris.util.is_regular`,
@@ -24,21 +12,15 @@ Specifically, this module tests the following functions:
 
 """
 
-from __future__ import (absolute_import, division, print_function)
-from six.moves import (filter, input, map, range, zip)  # noqa
-import six
-
 # import iris tests first so that some things can be initialised before
 # importing anything else
-import iris.tests as tests
-
-import inspect
+import iris.tests as tests  # isort:skip
 
 import numpy as np
 
 from iris.coords import AuxCoord, DimCoord
-from iris.exceptions import CoordinateNotRegularError, CoordinateMultiDimError
-from iris.util import is_regular, regular_step, points_step
+from iris.exceptions import CoordinateMultiDimError, CoordinateNotRegularError
+from iris.util import is_regular, points_step, regular_step
 
 
 class Test_is_regular(tests.IrisTest):
@@ -61,7 +43,7 @@ class Test_is_regular(tests.IrisTest):
 
     def test_coord_with_string_points(self):
         # Check that a `TypeError` is captured.
-        coord = AuxCoord(['a', 'b', 'c'])
+        coord = AuxCoord(["a", "b", "c"])
         result = is_regular(coord)
         self.assertFalse(result)
 
@@ -78,21 +60,21 @@ class Test_regular_step(tests.IrisTest):
 
     def test_2d_coord(self):
         coord = AuxCoord(np.arange(8).reshape(2, 4))
-        exp_emsg = 'Expected 1D coord'
-        with self.assertRaisesRegexp(CoordinateMultiDimError, exp_emsg):
+        exp_emsg = "Expected 1D coord"
+        with self.assertRaisesRegex(CoordinateMultiDimError, exp_emsg):
             regular_step(coord)
 
     def test_scalar_coord(self):
         coord = DimCoord(5)
-        exp_emsg = 'non-scalar coord'
-        with self.assertRaisesRegexp(ValueError, exp_emsg):
+        exp_emsg = "non-scalar coord"
+        with self.assertRaisesRegex(ValueError, exp_emsg):
             regular_step(coord)
 
     def test_coord_with_irregular_step(self):
-        name = 'latitude'
+        name = "latitude"
         coord = AuxCoord(np.array([2, 5, 1, 4]), standard_name=name)
-        exp_emsg = '{} is not regular'.format(name)
-        with self.assertRaisesRegexp(CoordinateNotRegularError, exp_emsg):
+        exp_emsg = "{} is not regular".format(name)
+        with self.assertRaisesRegex(CoordinateNotRegularError, exp_emsg):
             regular_step(coord)
 
 
@@ -111,6 +93,18 @@ class Test_points_step(tests.IrisTest):
         self.assertEqual(exp_avdiff, result_avdiff)
         self.assertFalse(result)
 
+    def test_single_point(self):
+        lone_point = np.array([4])
+        result_avdiff, result = points_step(lone_point)
+        self.assertTrue(np.isnan(result_avdiff))
+        self.assertTrue(result)
 
-if __name__ == '__main__':
+    def test_no_points(self):
+        no_points = np.array([])
+        result_avdiff, result = points_step(no_points)
+        self.assertTrue(np.isnan(result_avdiff))
+        self.assertTrue(result)
+
+
+if __name__ == "__main__":
     tests.main()

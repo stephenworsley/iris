@@ -1,40 +1,26 @@
-# (C) British Crown Copyright 2014 - 2017, Met Office
+# Copyright Iris contributors
 #
-# This file is part of Iris.
-#
-# Iris is free software: you can redistribute it and/or modify it under
-# the terms of the GNU Lesser General Public License as published by the
-# Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# Iris is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU Lesser General Public License for more details.
-#
-# You should have received a copy of the GNU Lesser General Public License
-# along with Iris.  If not, see <http://www.gnu.org/licenses/>.
+# This file is part of Iris and is released under the BSD license.
+# See LICENSE in the root of the repository for full licensing details.
 """Unit tests for the :func:`iris.analysis.maths.subtract` function."""
-
-from __future__ import (absolute_import, division, print_function)
-from six.moves import (filter, input, map, range, zip)  # noqa
 
 # Import iris.tests first so that some things can be initialised before
 # importing anything else.
-import iris.tests as tests
+import iris.tests as tests  # isort:skip
 
 import operator
 
 from iris.analysis.maths import subtract
-from iris.tests.unit.analysis.maths import \
-    CubeArithmeticBroadcastingTestMixin, CubeArithmeticCoordsTest, \
-    CubeArithmeticMaskedConstantTestMixin, CubeArithmeticMaskingTestMixin
+from iris.tests.unit.analysis.maths import (
+    CubeArithmeticBroadcastingTestMixin,
+    CubeArithmeticCoordsTest,
+    CubeArithmeticMaskedConstantTestMixin,
+    CubeArithmeticMaskingTestMixin,
+)
 
 
 @tests.skip_data
-@tests.iristest_timing_decorator
-class TestBroadcasting(tests.IrisTest_nometa,
-                       CubeArithmeticBroadcastingTestMixin):
+class TestBroadcasting(tests.IrisTest, CubeArithmeticBroadcastingTestMixin):
     @property
     def data_op(self):
         return operator.sub
@@ -44,8 +30,7 @@ class TestBroadcasting(tests.IrisTest_nometa,
         return subtract
 
 
-@tests.iristest_timing_decorator
-class TestMasking(tests.IrisTest_nometa, CubeArithmeticMaskingTestMixin):
+class TestMasking(tests.IrisTest, CubeArithmeticMaskingTestMixin):
     @property
     def data_op(self):
         return operator.sub
@@ -67,9 +52,7 @@ class TestCoordMatch(CubeArithmeticCoordsTest):
             subtract(cube1, cube2)
 
 
-@tests.iristest_timing_decorator
-class TestMaskedConstant(tests.IrisTest_nometa,
-                         CubeArithmeticMaskedConstantTestMixin):
+class TestMaskedConstant(tests.IrisTest, CubeArithmeticMaskedConstantTestMixin):
     @property
     def data_op(self):
         return operator.sub

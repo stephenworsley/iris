@@ -1,120 +1,49 @@
 <h1 align="center">
-  <a href="https://scitools.org.uk/iris/docs/latest/" style="display: block; margin: 0 auto;">
-   <img src="https://raw.githubusercontent.com/SciTools/iris/master/docs/iris/src/_static/logo_banner.png"
-        style="max-width: 40%;" alt="Iris"></a><br>
+  <a href="https://scitools-iris.readthedocs.io/en/latest/">
+   <img src="https://scitools-iris.readthedocs.io/en/latest/_static/iris-logo-title.svg" alt="Iris" width="300"></a><br>
 </h1>
 
+
 <h4 align="center">
-    Iris is a powerful, format-agnostic, community-driven Python library for
+    Iris is a powerful, format-agnostic, community-driven Python package for
     analysing and visualising Earth science data
 </h4>
 
+|                  |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+|------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| ⚙️ CI            | [![ci-manifest](https://github.com/SciTools/iris/actions/workflows/ci-manifest.yml/badge.svg)](https://github.com/SciTools/iris/actions/workflows/ci-manifest.yml) [![ci-tests](https://github.com/SciTools/iris/actions/workflows/ci-tests.yml/badge.svg)](https://github.com/SciTools/iris/actions/workflows/ci-tests.yml) [![ci-wheels](https://github.com/SciTools/iris/actions/workflows/ci-wheels.yml/badge.svg)](https://github.com/SciTools/iris/actions/workflows/ci-wheels.yml) [![pre-commit](https://results.pre-commit.ci/badge/github/SciTools/iris/main.svg)](https://results.pre-commit.ci/latest/github/SciTools/iris/main) |
+| 💬 Community     | [![Contributor Covenant](https://img.shields.io/badge/contributor%20covenant-2.1-4baaaa.svg)](https://www.contributor-covenant.org/version/2/1/code_of_conduct/) [![GH Discussions](https://img.shields.io/badge/github-discussions%20%F0%9F%92%AC-yellow?logo=github&logoColor=lightgrey)](https://github.com/SciTools/iris/discussions) [![twitter](https://img.shields.io/twitter/follow/scitools_iris?color=yellow&label=twitter%7Cscitools_iris&logo=twitter&style=plastic)](https://twitter.com/scitools_iris)                                                                                                                         |
+| 📖 Documentation | [![rtd](https://readthedocs.org/projects/scitools-iris/badge/?version=latest)](https://scitools-iris.readthedocs.io/en/latest/?badge=latest)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| 📈 Health        | [![codecov](https://codecov.io/gh/SciTools/iris/branch/main/graph/badge.svg?token=0GeICSIF3g)](https://codecov.io/gh/SciTools/iris)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| ✨ Meta           | [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff) [![NEP29](https://raster.shields.io/badge/follows-NEP29-orange.png)](https://numpy.org/neps/nep-0029-deprecation_policy.html) [![license - bds-3-clause](https://img.shields.io/github/license/SciTools/iris)](https://github.com/SciTools/iris/blob/main/LICENSE) [![conda platform](https://img.shields.io/conda/pn/conda-forge/iris.svg)](https://anaconda.org/conda-forge/iris)                                                                                             |
+| 📦 Package       | [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.595182.svg)](https://doi.org/10.5281/zenodo.595182) [![conda-forge](https://img.shields.io/conda/vn/conda-forge/iris?color=orange&label=conda-forge&logo=conda-forge&logoColor=white)](https://anaconda.org/conda-forge/iris) [![pypi](https://img.shields.io/pypi/v/scitools-iris?color=orange&label=pypi&logo=python&logoColor=white)](https://pypi.org/project/scitools-iris/) [![pypi - python version](https://img.shields.io/pypi/pyversions/scitools-iris.svg?color=orange&logo=python&label=python&logoColor=white)](https://pypi.org/project/scitools-iris/)                    |
+| 🧰 Repo          | [![commits-since](https://img.shields.io/github/commits-since/SciTools/iris/latest.svg)](https://github.com/SciTools/iris/commits/main) [![contributors](https://img.shields.io/github/contributors/SciTools/iris)](https://github.com/SciTools/iris/graphs/contributors) [![release](https://img.shields.io/github/v/release/scitools/iris)](https://github.com/SciTools/iris/releases)                                                                                                                                                                                                                                                     |
+|                  |
+
 <p align="center">
-<!-- https://shields.io/ is a good source of these -->
-<a href="https://travis-ci.org/SciTools/iris/branches">
-<img src="https://api.travis-ci.org/repositories/SciTools/iris.svg?branch=master"
-     alt="Travis-CI" /></a>
-<a href="https://anaconda.org/conda-forge/iris">
-<img src="https://img.shields.io/conda/dn/conda-forge/iris.svg"
-     alt="conda-forge downloads" /></a>
-<a href="https://github.com/SciTools/iris/graphs/contributors">
-<img src="https://img.shields.io/github/contributors/SciTools/iris.svg"
-     alt="# contributors" /></a>
-<a href="https://github.com/SciTools/iris/releases">
-<img src="https://img.shields.io/github/tag/SciTools/iris.svg"
-     alt="Latest version" /></a>
-<a href="https://scitools.org.uk/iris/docs/latest/index.html">
-<img src="https://img.shields.io/badge/docs-stable-green.svg"
-     alt="Stable docs" /></a>
-<a href="https://github.com/SciTools/iris/commits/master">
-<img src="https://img.shields.io/github/commits-since/SciTools/iris/latest.svg"
-     alt="Commits since last release" /></a>
-<a href="https://scitools-docs.github.io/iris/master/index.html">
-<img src="https://img.shields.io/badge/docs-latest-blue.svg"
-     alt="Latest docs" /></a>
-<a href="https://zenodo.org/badge/latestdoi/5312648">
-<img src="https://zenodo.org/badge/5312648.svg"
-     alt="zenodo" /></a>
+For documentation see the 
+<a href="https://scitools-iris.readthedocs.io/en/latest/">latest</a>  
+developer version or the most recent released
+<a href="https://scitools-iris.readthedocs.io/en/stable/">stable</a> version.
 </p>
-<br>
 
-<!-- NOTE: toc auto-generated with https://github.com/frnmst/md-toc:
-   $ md_toc github README.md -i
--->
+## [#ShowYourStripes](https://showyourstripes.info/s/globe)
 
-<h1>Table of contents</h1>
+<h4 align="center">
+  <a href="https://showyourstripes.info/s/globe">
+    <img src="https://raw.githubusercontent.com/ed-hawkins/show-your-stripes/master/2021/GLOBE---1850-2021-MO.png"
+         height="50" width="800"
+         alt="#showyourstripes Global 1850-2021"></a>
+</h4>
 
-[](TOC)
+**Graphics and Lead Scientist**: [Ed Hawkins](https://www.met.reading.ac.uk/~ed/home/index.php), National Centre for Atmospheric Science, University of Reading.
 
-+ [Overview](#overview)
-+ [Documentation](#documentation)
-+ [Installation](#installation)
-+ [Copyright and licence](#copyright-and-licence)
-+ [Get in touch](#get-in-touch)
-+ [Contributing](#contributing)
+**Data**: Berkeley Earth, NOAA, UK Met Office, MeteoSwiss, DWD, SMHI, UoR, Meteo France & ZAMG.
 
-[](TOC)
+<p>
+<a href="https://showyourstripes.info/s/globe">#ShowYourStripes</a> is distributed under a
+<a href="https://creativecommons.org/licenses/by/4.0/">Creative Commons Attribution 4.0 International License</a>
+<a href="https://creativecommons.org/licenses/by/4.0/">
+  <img src="https://i.creativecommons.org/l/by/4.0/80x15.png" alt="creative-commons-by" style="border-width:0"></a>
+</p>
 
-# Overview
-
-Iris implements a data model based on the [CF conventions](http://cfconventions.org/)
-giving you a powerful, format-agnostic interface for working with your data.
-It excels when working with multi-dimensional Earth Science data, where tabular
-representations become unwieldy and inefficient.
-
-[CF Standard names](http://cfconventions.org/standard-names.html),
-[units](https://github.com/SciTools/cf_units), and coordinate metadata
-are built into Iris, giving you a rich and expressive interface for maintaining
-an accurate representation of your data. Its treatment of data and
-  associated metadata as first-class objects includes:
-
-  * a visualisation interface based on [matplotlib](https://matplotlib.org/) and
-    [cartopy](https://scitools.org.uk/cartopy/docs/latest/),
-  * unit conversion,
-  * subsetting and extraction,
-  * merge and concatenate,
-  * aggregations and reductions (including min, max, mean and weighted averages),
-  * interpolation and regridding (including nearest-neighbor, linear and area-weighted), and
-  * operator overloads (``+``, ``-``, ``*``, ``/``, etc.)
-
-A number of file formats are recognised by Iris, including CF-compliant NetCDF, GRIB,
-and PP, and it has a plugin architecture to allow other formats to be added seamlessly.
-
-Building upon [NumPy](http://www.numpy.org/) and [dask](https://dask.pydata.org/en/latest/),
-Iris scales from efficient single-machine workflows right through to multi-core clusters and HPC.
-Interoperability with packages from the wider scientific Python ecosystem comes from Iris'
-use of standard NumPy/dask arrays as its underlying data storage.
-
-
-# Documentation
-
-<a href="https://scitools.org.uk/iris/docs/latest/index.html"> <img src="https://img.shields.io/badge/docs-stable-green.svg" alt="Stable docs" /></a> The documentation for *stable released versions* of Iris, including a user guide, example code, and gallery.
-
-<a href="https://scitools-docs.github.io/iris/master/index.html"> <img src="https://img.shields.io/badge/docs-latest-blue.svg" alt="Latest docs" /></a> The documentation for the *latest development version* of Iris.
-
-
-# Installation
-
-The easiest way to install Iris is with [conda](https://conda.io/miniconda.html):
-
-    conda install -c conda-forge iris
-
-Detailed instructions, including information on installing from source,
-are available in [INSTALL](INSTALL).
-
-# Get in touch
-
-  * Report bugs, or suggest new features using an Issue or Pull Request on [Github](https://github.com/SciTools/iris). You can also comment on existing Issues and Pull Requests.
-  * For discussions from a user perspective you could join our [SciTools Users Google Group](https://groups.google.com/forum/#!forum/scitools-iris).
-  * For those involved in developing Iris we also have an [Iris Developers Google Group](https://groups.google.com/forum/#!forum/scitools-iris-dev).
-  * [StackOverflow](https://stackoverflow.com/questions/tagged/python-iris) For "How do I?".
-
-# Copyright and licence
-
-Iris may be freely distributed, modified and used commercially under the terms
-of its [GNU LGPLv3 license](COPYING.LESSER).
-
-# Contributing
-Information on how to contribute can be found in the [Iris developer guide](https://scitools.org.uk/iris/docs/latest/developers_guide/index.html).
-
-(C) British Crown Copyright 2010 - 2019, Met Office

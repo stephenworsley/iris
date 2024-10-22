@@ -1,32 +1,15 @@
-# (C) British Crown Copyright 2015 - 2016, Met Office
+# Copyright Iris contributors
 #
-# This file is part of Iris.
-#
-# Iris is free software: you can redistribute it and/or modify it under
-# the terms of the GNU Lesser General Public License as published by the
-# Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# Iris is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU Lesser General Public License for more details.
-#
-# You should have received a copy of the GNU Lesser General Public License
-# along with Iris.  If not, see <http://www.gnu.org/licenses/>.
-"""
-Unit tests for the :class:`iris.coord_systems.LambertAzimuthalEqualArea` class.
-
-"""
-
-from __future__ import (absolute_import, division, print_function)
-from six.moves import (filter, input, map, range, zip)  # noqa
+# This file is part of Iris and is released under the BSD license.
+# See LICENSE in the root of the repository for full licensing details.
+"""Unit tests for the :class:`iris.coord_systems.LambertAzimuthalEqualArea` class."""
 
 # Import iris.tests first so that some things can be initialised before
 # importing anything else.
-import iris.tests as tests
+import iris.tests as tests  # isort:skip
 
 import cartopy.crs as ccrs
+
 from iris.coord_systems import GeogCS, LambertAzimuthalEqualArea
 
 
@@ -44,19 +27,23 @@ class Test_as_cartopy_crs(tests.IrisTest):
             self.longitude_of_projection_origin,
             self.false_easting,
             self.false_northing,
-            ellipsoid=self.ellipsoid)
+            ellipsoid=self.ellipsoid,
+        )
 
     def test_crs_creation(self):
         res = self.laea_cs.as_cartopy_crs()
-        globe = ccrs.Globe(semimajor_axis=self.semi_major_axis,
-                           semiminor_axis=self.semi_minor_axis,
-                           ellipse=None)
+        globe = ccrs.Globe(
+            semimajor_axis=self.semi_major_axis,
+            semiminor_axis=self.semi_minor_axis,
+            ellipse=None,
+        )
         expected = ccrs.LambertAzimuthalEqualArea(
             self.longitude_of_projection_origin,
             self.latitude_of_projection_origin,
             self.false_easting,
             self.false_northing,
-            globe=globe)
+            globe=globe,
+        )
         self.assertEqual(res, expected)
 
 
@@ -74,21 +61,63 @@ class Test_as_cartopy_projection(tests.IrisTest):
             self.longitude_of_projection_origin,
             self.false_easting,
             self.false_northing,
-            ellipsoid=self.ellipsoid)
+            ellipsoid=self.ellipsoid,
+        )
 
     def test_projection_creation(self):
         res = self.laea_cs.as_cartopy_projection()
-        globe = ccrs.Globe(semimajor_axis=self.semi_major_axis,
-                           semiminor_axis=self.semi_minor_axis,
-                           ellipse=None)
+        globe = ccrs.Globe(
+            semimajor_axis=self.semi_major_axis,
+            semiminor_axis=self.semi_minor_axis,
+            ellipse=None,
+        )
         expected = ccrs.LambertAzimuthalEqualArea(
             self.latitude_of_projection_origin,
             self.longitude_of_projection_origin,
             self.false_easting,
             self.false_northing,
-            globe=globe)
+            globe=globe,
+        )
         self.assertEqual(res, expected)
 
 
-if __name__ == '__main__':
+class Test_init_defaults(tests.IrisTest):
+    def test_set_optional_args(self):
+        # Check that setting the optional (non-ellipse) args works.
+        crs = LambertAzimuthalEqualArea(
+            longitude_of_projection_origin=123,
+            latitude_of_projection_origin=-37,
+            false_easting=100,
+            false_northing=-200,
+        )
+        self.assertEqualAndKind(crs.longitude_of_projection_origin, 123.0)
+        self.assertEqualAndKind(crs.latitude_of_projection_origin, -37.0)
+        self.assertEqualAndKind(crs.false_easting, 100.0)
+        self.assertEqualAndKind(crs.false_northing, -200.0)
+
+    def _check_crs_defaults(self, crs):
+        # Check for property defaults when no kwargs options were set.
+        # NOTE: except ellipsoid, which is done elsewhere.
+        self.assertEqualAndKind(crs.longitude_of_projection_origin, 0.0)
+        self.assertEqualAndKind(crs.latitude_of_projection_origin, 0.0)
+        self.assertEqualAndKind(crs.false_easting, 0.0)
+        self.assertEqualAndKind(crs.false_northing, 0.0)
+
+    def test_no_optional_args(self):
+        # Check expected defaults with no optional args.
+        crs = LambertAzimuthalEqualArea()
+        self._check_crs_defaults(crs)
+
+    def test_optional_args_None(self):
+        # Check expected defaults with optional args=None.
+        crs = LambertAzimuthalEqualArea(
+            longitude_of_projection_origin=None,
+            latitude_of_projection_origin=None,
+            false_easting=None,
+            false_northing=None,
+        )
+        self._check_crs_defaults(crs)
+
+
+if __name__ == "__main__":
     tests.main()

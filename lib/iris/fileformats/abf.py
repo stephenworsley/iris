@@ -1,33 +1,16 @@
-# (C) British Crown Copyright 2012 - 2019, Met Office
+# Copyright Iris contributors
 #
-# This file is part of Iris.
-#
-# Iris is free software: you can redistribute it and/or modify it under
-# the terms of the GNU Lesser General Public License as published by the
-# Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# Iris is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU Lesser General Public License for more details.
-#
-# You should have received a copy of the GNU Lesser General Public License
-# along with Iris.  If not, see <http://www.gnu.org/licenses/>.
-"""
-Provides ABF (and ABL) file format capabilities.
+# This file is part of Iris and is released under the BSD license.
+# See LICENSE in the root of the repository for full licensing details.
+"""Provides ABF (and ABL) file format capabilities.
 
 ABF and ABL files are satellite file formats defined by Boston University.
 Including this module adds ABF and ABL loading to the session's capabilities.
 
 The documentation for this file format can be found
-`here <http://cliveg.bu.edu/modismisr/lai3g-fpar3g.html>`_.
+`here <https://nasanex.s3.amazonaws.com/AVHRR/GIMMS/LAI3G/00README_V01.pdf>`_.
 
 """
-
-from __future__ import (absolute_import, division, print_function)
-from six.moves import (filter, input, map, range, zip)  # noqa
-import six
 
 import calendar
 import datetime
@@ -38,49 +21,72 @@ import numpy as np
 import numpy.ma as ma
 
 import iris
-from iris.coords import AuxCoord, DimCoord
+from iris._deprecation import warn_deprecated
 from iris.coord_systems import GeogCS
+from iris.coords import AuxCoord, DimCoord
 import iris.fileformats
 import iris.io.format_picker
 
+wmsg = (
+    "iris.fileformats.abf has been deprecated and will be removed in a "
+    "future release. If you make use of this functionality, please contact "
+    "the Iris Developers to discuss how to retain it (which may involve "
+    "reversing the deprecation)."
+)
+warn_deprecated(wmsg)
 
 X_SIZE = 4320
 Y_SIZE = 2160
 
 
-month_numbers = {"jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
-                 "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12}
+month_numbers = {
+    "jan": 1,
+    "feb": 2,
+    "mar": 3,
+    "apr": 4,
+    "may": 5,
+    "jun": 6,
+    "jul": 7,
+    "aug": 8,
+    "sep": 9,
+    "oct": 10,
+    "nov": 11,
+    "dec": 12,
+}
 
 
-class ABFField(object):
-    """
-    A data field from an ABF (or ABL) file.
+class ABFField:
+    """A data field from an ABF (or ABL) file.
 
     Capable of creating a :class:`~iris.cube.Cube`.
 
     """
+
     def __init__(self, filename):
-        """
-        Create an ABFField object from the given filename.
+        """Create an ABFField object from the given filename.
 
-        Args:
+        Parameters
+        ----------
+        filename : str
+            An ABF filename.
 
-            * filename - An ABF filename.
-
-        Example::
+        Examples
+        --------
+        ::
 
             field = ABFField("AVHRRBUVI01.1985feba.abl")
 
         """
         basename = os.path.basename(filename)
         if len(basename) != 24:
-            raise ValueError("ABFField expects a filename of 24 characters: "
-                             "{}".format(basename))
+            raise ValueError(
+                "ABFField expects a filename of 24 characters: {}".format(basename)
+            )
         self._filename = filename
 
     def __getattr__(self, key):
         # Do we need to load now?
-        if key == 'data' and 'data' not in self.__dict__:
+        if key == "data" and "data" not in self.__dict__:
             self._read()
         try:
             return self.__dict__[key]
@@ -99,7 +105,7 @@ class ABFField(object):
         self.month = month_numbers[self.month]
 
         # Data is 8 bit bigendian.
-        data = np.fromfile(self._filename, dtype='>u1').reshape(X_SIZE, Y_SIZE)
+        data = np.fromfile(self._filename, dtype=">u1").reshape(X_SIZE, Y_SIZE)
         # Iris' preferred dimensional ordering is (y,x).
         data = data.transpose()
         # Flip, for a positive step through the Y dimension.
@@ -113,7 +119,6 @@ class ABFField(object):
 
     def to_cube(self):
         """Return a new :class:`~iris.cube.Cube` from this ABFField."""
-
         cube = iris.cube.Cube(self.data)
 
         # Name.
@@ -131,13 +136,19 @@ class ABFField(object):
 
         llcs = GeogCS(semi_major_axis=6378137.0, semi_minor_axis=6356752.31424)
 
-        x_coord = DimCoord(np.arange(X_SIZE) * step + (step / 2) - 180,
-                           standard_name="longitude", units="degrees",
-                           coord_system=llcs)
+        x_coord = DimCoord(
+            np.arange(X_SIZE) * step + (step / 2) - 180,
+            standard_name="longitude",
+            units="degrees",
+            coord_system=llcs,
+        )
 
-        y_coord = DimCoord(np.arange(Y_SIZE) * step + (step / 2) - 90,
-                           standard_name="latitude",  units="degrees",
-                           coord_system=llcs)
+        y_coord = DimCoord(
+            np.arange(Y_SIZE) * step + (step / 2) - 90,
+            standard_name="latitude",
+            units="degrees",
+            coord_system=llcs,
+        )
 
         x_coord.guess_bounds()
         y_coord.guess_bounds()
@@ -153,8 +164,9 @@ class ABFField(object):
             start = 16
             end = calendar.monthrange(self.year, self.month)[1]
         else:
-            raise iris.exceptions.TranslationError("Unknown period: "
-                                                   "{}".format(self.period))
+            raise iris.exceptions.TranslationError(
+                "Unknown period: {}".format(self.period)
+            )
 
         start = datetime.date(year=self.year, month=self.month, day=start)
         end = datetime.date(year=self.year, month=self.month, day=end)
@@ -166,9 +178,14 @@ class ABFField(object):
         end = end.toordinal() - 1
 
         # TODO: Should we put the point in the middle of the period instead?
-        cube.add_aux_coord(AuxCoord(start, standard_name="time",
-                                    units="days since 0001-01-01",
-                                    bounds=[start, end]))
+        cube.add_aux_coord(
+            AuxCoord(
+                start,
+                standard_name="time",
+                units="days since 0001-01-01",
+                bounds=[start, end],
+            )
+        )
 
         # TODO: Do they only come from Boston?
         # Attributes.
@@ -178,28 +195,27 @@ class ABFField(object):
 
 
 def load_cubes(filespecs, callback=None):
-    """
-    Loads cubes from a list of ABF filenames.
+    """Load cubes from a list of ABF filenames.
 
-    Args:
+    Parameters
+    ----------
+    filenames :
+        List of ABF filenames to load.
+    callback : optional
+        A function that can be passed to :func:`iris.io.run_callback`.
 
-    * filenames - list of ABF filenames to load
-
-    Kwargs:
-
-    * callback - a function that can be passed to :func:`iris.io.run_callback`
-
+    Notes
+    -----
     .. note::
 
         The resultant cubes may not be in the same order as in the file.
 
     """
-    if isinstance(filespecs, six.string_types):
+    if isinstance(filespecs, str):
         filespecs = [filespecs]
 
     for filespec in filespecs:
         for filename in glob.glob(filespec):
-
             field = ABFField(filename)
             cube = field.to_cube()
 

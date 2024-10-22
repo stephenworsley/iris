@@ -1,36 +1,22 @@
-# (C) British Crown Copyright 2014 - 2015, Met Office
+# Copyright Iris contributors
 #
-# This file is part of Iris.
-#
-# Iris is free software: you can redistribute it and/or modify it under
-# the terms of the GNU Lesser General Public License as published by the
-# Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# Iris is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU Lesser General Public License for more details.
-#
-# You should have received a copy of the GNU Lesser General Public License
-# along with Iris.  If not, see <http://www.gnu.org/licenses/>.
-"""
-Unit tests for the
+# This file is part of Iris and is released under the BSD license.
+# See LICENSE in the root of the repository for full licensing details.
+"""Unit tests for the
 :mod:`iris.fileformats._structured_array_identification.ArrayStructure` class.
 
 """
 
-from __future__ import (absolute_import, division, print_function)
-from six.moves import (filter, input, map, range, zip)  # noqa
-
 # Import iris.tests first so that some things can be initialised before
 # importing anything else.
-import iris.tests as tests
+import iris.tests as tests  # isort:skip
 
 import numpy as np
 
-from iris.fileformats._structured_array_identification import \
-    ArrayStructure, _UnstructuredArrayException
+from iris.fileformats._structured_array_identification import (
+    ArrayStructure,
+    _UnstructuredArrayException,
+)
 
 
 def construct_nd(sub_array, sub_dim, shape):
@@ -64,8 +50,7 @@ class TestArrayStructure_from_array(tests.IrisTest):
 
     def test_1d_range(self):
         a = np.arange(6)
-        self.assertEqual(self.struct_from_arr(a),
-                         ArrayStructure(1, list(range(6))))
+        self.assertEqual(self.struct_from_arr(a), ArrayStructure(1, list(range(6))))
 
     def test_3d_ones(self):
         a = np.ones([10, 2, 1])
@@ -73,13 +58,13 @@ class TestArrayStructure_from_array(tests.IrisTest):
 
     def test_1d_over_2d_first_dim_manual(self):
         sub = np.array([10, 10, 20, 20])
-        self.assertEqual(self.struct_from_arr(sub),
-                         ArrayStructure(2, [10, 20]))
+        self.assertEqual(self.struct_from_arr(sub), ArrayStructure(2, [10, 20]))
 
     def test_3d_first_dimension(self):
         flattened = np.array([1, 1, 1, 2, 2, 2])
-        self.assertEqual(ArrayStructure.from_array(flattened),
-                         ArrayStructure(3, [1, 2]))
+        self.assertEqual(
+            ArrayStructure.from_array(flattened), ArrayStructure(3, [1, 2])
+        )
 
     def test_1d_over_2d_first_dim(self):
         sub = np.array([-1, 3, 1, 2])
@@ -134,21 +119,22 @@ class TestArrayStructure_from_array(tests.IrisTest):
 
     def test_not_an_array(self):
         # Support lists as an argument.
-        self.assertEqual(ArrayStructure.from_array([1, 2, 3]),
-                         ArrayStructure(1, [1, 2, 3]))
+        self.assertEqual(
+            ArrayStructure.from_array([1, 2, 3]), ArrayStructure(1, [1, 2, 3])
+        )
 
     def test_multi_dim_array(self):
         with self.assertRaises(ValueError):
             ArrayStructure.from_array(np.arange(12).reshape(3, 4))
 
 
-class nd_array_and_dims_cases(object):
-    """
-    Defines the test functionality for nd_array_and_dims. This class
+class nd_array_and_dims_cases:
+    """Defines the test functionality for nd_array_and_dims. This class
     isn't actually the test case - see the C order and F order subclasses
     for those.
 
     """
+
     def test_scalar_len1_first_dim(self):
         struct = ArrayStructure(1, [1])
         orig = np.array([1, 1, 1])
@@ -169,20 +155,18 @@ class nd_array_and_dims_cases(object):
         orig = construct_nd(np.array([1, 2]), 0, (2, 1, 3))
         flattened = orig.flatten(order=self.order)
         struct = ArrayStructure.from_array(flattened)
-        array, dims = struct.nd_array_and_dims(flattened, (2, 1, 3),
-                                               order=self.order)
+        array, dims = struct.nd_array_and_dims(flattened, (2, 1, 3), order=self.order)
         self.assertArrayEqual(array, [1, 2])
-        self.assertEqual(dims, (0, ))
+        self.assertEqual(dims, (0,))
 
     def test_single_vector_3rd_dim(self):
         orig = construct_nd(np.array([1, 2, 3]), 2, (4, 1, 3))
         flattened = orig.flatten(order=self.order)
 
         struct = ArrayStructure.from_array(flattened)
-        array, dims = struct.nd_array_and_dims(flattened, (4, 1, 3),
-                                               order=self.order)
+        array, dims = struct.nd_array_and_dims(flattened, (4, 1, 3), order=self.order)
         self.assertArrayEqual(array, [1, 2, 3])
-        self.assertEqual(dims, (2, ))
+        self.assertEqual(dims, (2,))
 
     def test_orig_array_and_target_shape_inconsistent(self):
         # An array structure which has a length which is a product
@@ -190,8 +174,8 @@ class nd_array_and_dims_cases(object):
         struct = ArrayStructure(2, [1, 2, 3])
         orig = np.array([1, 1, 2, 2, 3, 3])
 
-        msg = 'Original array and target shape do not match up.'
-        with self.assertRaisesRegexp(ValueError, msg):
+        msg = "Original array and target shape do not match up."
+        with self.assertRaisesRegex(ValueError, msg):
             struct.nd_array_and_dims(orig, (2, 3, 2), order=self.order)
 
     def test_array_bigger_than_expected(self):
@@ -212,20 +196,23 @@ class nd_array_and_dims_cases(object):
         # Add another dimension on flattened, making it a (6, 2).
         input_array = np.vstack([flattened, flattened + 100]).T
 
-        array, dims = struct.nd_array_and_dims(input_array, (3, 1, 2, 1),
-                                               order=self.order)
+        array, dims = struct.nd_array_and_dims(
+            input_array, (3, 1, 2, 1), order=self.order
+        )
         self.assertArrayEqual(array, [[1, 101], [2, 102]])
-        self.assertEqual(dims, (2, ))
+        self.assertEqual(dims, (2,))
 
 
-class TestArrayStructure_nd_array_and_dims_f_order(tests.IrisTest,
-                                                   nd_array_and_dims_cases):
-    order = 'f'
+class TestArrayStructure_nd_array_and_dims_f_order(
+    tests.IrisTest, nd_array_and_dims_cases
+):
+    order = "f"
 
 
-class TestArrayStructure_nd_array_and_dims_c_order(tests.IrisTest,
-                                                   nd_array_and_dims_cases):
-    order = 'c'
+class TestArrayStructure_nd_array_and_dims_c_order(
+    tests.IrisTest, nd_array_and_dims_cases
+):
+    order = "c"
 
 
 if __name__ == "__main__":

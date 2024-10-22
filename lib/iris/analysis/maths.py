@@ -1,73 +1,58 @@
-# (C) British Crown Copyright 2010 - 2019, Met Office
+# Copyright Iris contributors
 #
-# This file is part of Iris.
-#
-# Iris is free software: you can redistribute it and/or modify it under
-# the terms of the GNU Lesser General Public License as published by the
-# Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# Iris is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU Lesser General Public License for more details.
-#
-# You should have received a copy of the GNU Lesser General Public License
-# along with Iris.  If not, see <http://www.gnu.org/licenses/>.
-"""
-Basic mathematical and statistical operations.
+# This file is part of Iris and is released under the BSD license.
+# See LICENSE in the root of the repository for full licensing details.
+"""Basic mathematical and statistical operations."""
 
-"""
-
-from __future__ import (absolute_import, division, print_function)
-from six.moves import (filter, input, map, range, zip)  # noqa
-
+from functools import lru_cache
 import inspect
 import math
 import operator
-import six
 import warnings
 
 import cf_units
+import dask.array as da
 import numpy as np
 from numpy import ma
 
+from iris._deprecation import warn_deprecated
 import iris.analysis
+from iris.common import SERVICES, Resolve
+from iris.common.lenient import _lenient_client
+from iris.config import get_logger
 import iris.coords
-import iris.cube
 import iris.exceptions
 import iris.util
+import iris.warnings
 
-import dask.array as da
-from dask.array.core import broadcast_shapes
-
-
-_output_dtype_cache = {}
+# Configure the logger.
+logger = get_logger(__name__)
 
 
+@lru_cache(maxsize=128, typed=True)
 def _output_dtype(op, first_dtype, second_dtype=None, in_place=False):
-    """
+    """Get the numpy dtype.
+
     Get the numpy dtype corresponding to the result of applying a unary or
     binary operation to arguments of specified dtype.
 
-    Args:
-
-    * op:
+    Parameters
+    ----------
+    op :
         A unary or binary operator which can be applied to array-like objects.
-    * first_dtype:
+    first_dtype :
         The dtype of the first or only argument to the operator.
-
-    Kwargs:
-
-    * second_dtype:
+    second_dtype : optional
         The dtype of the second argument to the operator.
-
-    * in_place:
+    in_place : bool, default=False
         Whether the operation is to be performed in place.
 
-    Returns:
-        An instance of :class:`numpy.dtype`
+    Returns
+    -------
+    :class:`numpy.dtype`
 
+    Notes
+    -----
     .. note::
 
         The function always returns the dtype which would result if the
@@ -80,80 +65,107 @@ def _output_dtype(op, first_dtype, second_dtype=None, in_place=False):
         # to failure to cast the result.
         result = first_dtype
     else:
-        operand_dtypes = (first_dtype, second_dtype) \
-            if second_dtype is not None \
-            else (first_dtype,)
-        key = (op, operand_dtypes)
-        result = _output_dtype_cache.get(key, None)
-        if result is None:
-            arrays = [np.array([1], dtype=dtype) for dtype in operand_dtypes]
-            result = op(*arrays).dtype
-            _output_dtype_cache[key] = result
+        operand_dtypes = (
+            (first_dtype, second_dtype) if second_dtype is not None else (first_dtype,)
+        )
+        arrays = [np.array([1], dtype=dtype) for dtype in operand_dtypes]
+        result = op(*arrays).dtype
     return result
 
 
 def _get_dtype(operand):
-    """
-    Get the numpy dtype corresponding to the numeric data in the object
-    provided.
+    """Get the numpy dtype corresponding to the numeric data in the object provided.
 
-    Args:
-
-    * operand:
+    Parameters
+    ----------
+    operand :
         An instance of :class:`iris.cube.Cube` or :class:`iris.coords.Coord`,
         or a number or :class:`numpy.ndarray`.
 
-    Returns:
-        An instance of :class:`numpy.dtype`
+    Returns
+    -------
+    :class:`numpy.dtype`
 
     """
-    return np.min_scalar_type(operand) if np.isscalar(operand) \
-        else operand.dtype
+    return np.min_scalar_type(operand) if np.isscalar(operand) else operand.dtype
 
 
 def abs(cube, in_place=False):
-    """
-    Calculate the absolute values of the data in the Cube provided.
+    """Calculate the absolute values of the data in the Cube provided.
 
-    Args:
-
-    * cube:
+    Parameters
+    ----------
+    cube :
         An instance of :class:`iris.cube.Cube`.
-
-    Kwargs:
-
-    * in_place:
+    in_place : bool, default=False
         Whether to create a new Cube, or alter the given "cube".
 
-    Returns:
-        An instance of :class:`iris.cube.Cube`.
+    Returns
+    -------
+    :class:`iris.cube.Cube`.
+
+    Notes
+    -----
+    This function maintains laziness when called; it does not realise data.
+    See more at :doc:`/userguide/real_and_lazy_data`.
 
     """
     _assert_is_cube(cube)
     new_dtype = _output_dtype(np.abs, cube.dtype, in_place=in_place)
     op = da.absolute if cube.has_lazy_data() else np.abs
-    return _math_op_common(cube, op, cube.units, new_dtype, in_place=in_place)
+    return _math_op_common(cube, op, cube.units, new_dtype=new_dtype, in_place=in_place)
 
 
 def intersection_of_cubes(cube, other_cube):
-    """
-    Return the two Cubes of intersection given two Cubes.
+    """Return the two Cubes of intersection given two Cubes.
 
     .. note:: The intersection of cubes function will ignore all single valued
         coordinates in checking the intersection.
 
-    Args:
-
-    * cube:
+    Parameters
+    ----------
+    cube :
         An instance of :class:`iris.cube.Cube`.
-    * other_cube:
+    other_cube :
         An instance of :class:`iris.cube.Cube`.
 
-    Returns:
-        A pair of :class:`iris.cube.Cube` instances in a tuple corresponding
-        to the original cubes restricted to their intersection.
+    Returns
+    -------
+    A paired tuple of :class:`iris.cube.Cube`
+        A pair of :class:`iris.cube.Cube` instances in a tuple corresponding to
+        the original cubes restricted to their intersection.
+
+    Notes
+    -----
+    .. deprecated:: 3.2.0
+
+       Instead use :meth:`iris.cube.CubeList.extract_overlapping`. For example,
+       rather than calling
+
+       .. code::
+
+          cube1, cube2 = intersection_of_cubes(cube1, cube2)
+
+       replace with
+
+       .. code::
+
+          cubes = CubeList([cube1, cube2])
+          coords = ["latitude", "longitude"]    # Replace with relevant coords
+          intersections = cubes.extract_overlapping(coords)
+          cube1, cube2 = (intersections[0], intersections[1])
+
+    This function maintains laziness when called; it does not realise data.
+    See more at :doc:`/userguide/real_and_lazy_data`.
 
     """
+    wmsg = (
+        "iris.analysis.maths.intersection_of_cubes has been deprecated and will "
+        "be removed, please use iris.cube.CubeList.extract_overlapping "
+        "instead. See intersection_of_cubes docstring for more information."
+    )
+    warn_deprecated(wmsg)
+
     # Take references of the original cubes (which will be copied when
     # slicing later).
     new_cube_self = cube
@@ -165,11 +177,12 @@ def intersection_of_cubes(cube, other_cube):
         if coord.ndim != 1:
             raise iris.exceptions.CoordinateMultiDimError(coord)
 
-    coord_comp = iris.analysis.coord_comparison(cube, other_cube)
+    coord_comp = iris.analysis._dimensional_metadata_comparison(cube, other_cube)
 
-    if coord_comp['ungroupable_and_dimensioned']:
-        raise ValueError('Cubes do not share all coordinates in common, '
-                         'cannot intersect.')
+    if coord_comp["ungroupable_and_dimensioned"]:
+        raise ValueError(
+            "Cubes do not share all coordinates in common, cannot intersect."
+        )
 
     # cubes must have matching coordinates
     for coord in cube.coords():
@@ -186,249 +199,239 @@ def intersection_of_cubes(cube, other_cube):
 
 
 def _assert_is_cube(cube):
-    if not isinstance(cube, iris.cube.Cube):
-        raise TypeError('The "cube" argument must be an instance of '
-                        'iris.cube.Cube.')
+    from iris.cube import Cube
+
+    if not isinstance(cube, Cube):
+        raise TypeError('The "cube" argument must be an instance of ' "iris.cube.Cube.")
 
 
-def _assert_compatible(cube, other):
-    """
-    Checks to see if cube.data and another array can be broadcast to
-    the same shape.
-
-    """
-    try:
-        new_shape = broadcast_shapes(cube.shape, other.shape)
-    except ValueError as err:
-        # re-raise
-        raise ValueError("The array was not broadcastable to the cube's data "
-                         "shape. The error message when "
-                         "broadcasting:\n{}\nThe cube's shape was {} and the "
-                         "array's shape was {}".format(err, cube.shape,
-                                                       other.shape))
-
-    if cube.shape != new_shape:
-        raise ValueError("The array operation would increase the size or "
-                         "dimensionality of the cube. The new cube's data "
-                         "would have had to become: {}".format(
-                             new_shape))
-
-
-def _assert_matching_units(cube, other, operation_name):
-    """
-    Check that the units of the cube and the other item are the same, or if
-    the other does not have a unit, skip this test
-    """
-    if cube.units != getattr(other, 'units', cube.units):
-        msg = 'Cannot use {!r} with differing units ({} & {})'.format(
-            operation_name, cube.units, other.units)
-        raise iris.exceptions.NotYetImplementedError(msg)
-
-
+@_lenient_client(services=SERVICES)
 def add(cube, other, dim=None, in_place=False):
-    """
-    Calculate the sum of two cubes, or the sum of a cube and a
-    coordinate or scalar value.
+    """Calculate the sum.
 
-    When summing two cubes, they must both have the same coordinate
-    systems & data resolution.
+    Calculate the sum of two cubes, or the sum of a cube and a coordinate or
+    array or scalar value.
 
-    When adding a coordinate to a cube, they must both share the same
-    number of elements along a shared axis.
+    When summing two cubes, they must both have the same coordinate systems and
+    data resolution.
 
-    Args:
+    When adding a coordinate to a cube, they must both share the same number of
+    elements along a shared axis.
 
-    * cube:
-        An instance of :class:`iris.cube.Cube`.
-    * other:
-        An instance of :class:`iris.cube.Cube` or :class:`iris.coords.Coord`,
-        or a number or :class:`numpy.ndarray`.
+    Parameters
+    ----------
+    cube : iris.cube.Cube
+        First operand to add.
+    other : iris.cube.Cube, iris.coords.Coord, number, numpy.ndarray or dask.array.Array
+        Second operand to add.
+    dim : int, optional
+        If `other` is a coord which does not exist on the cube, specify the
+        dimension to which it should be mapped.
+    in_place : bool, default=False
+        If `True`, alters the input cube.  Otherwise a new cube is created.
 
-    Kwargs:
+    Returns
+    -------
+    iris.cube.Cube
 
-    * dim:
-        If supplying a coord with no match on the cube, you must supply
-        the dimension to process.
-    * in_place:
-        Whether to create a new Cube, or alter the given "cube".
-
-    Returns:
-        An instance of :class:`iris.cube.Cube`.
+    Notes
+    -----
+    This function maintains laziness when called; it does not realise data.
+    See more at :doc:`/userguide/real_and_lazy_data`.
 
     """
     _assert_is_cube(cube)
-    new_dtype = _output_dtype(operator.add, cube.dtype, _get_dtype(other),
-                              in_place=in_place)
+    new_dtype = _output_dtype(
+        operator.add,
+        cube.dtype,
+        second_dtype=_get_dtype(other),
+        in_place=in_place,
+    )
     if in_place:
-        _inplace_common_checks(cube, other, 'addition')
+        _inplace_common_checks(cube, other, "addition")
         op = operator.iadd
     else:
         op = operator.add
-    return _add_subtract_common(op, 'add', cube, other, new_dtype, dim=dim,
-                                in_place=in_place)
+    return _add_subtract_common(
+        op, "add", cube, other, new_dtype, dim=dim, in_place=in_place
+    )
 
 
+@_lenient_client(services=SERVICES)
 def subtract(cube, other, dim=None, in_place=False):
-    """
+    """Calculate the difference.
+
     Calculate the difference between two cubes, or the difference between
-    a cube and a coordinate or scalar value.
+    a cube and a coordinate or array or scalar value.
 
-    When subtracting two cubes, they must both have the same coordinate
-    systems & data resolution.
+    When differencing two cubes, they must both have the same coordinate systems
+    and data resolution.
 
-    When subtracting a coordinate to a cube, they must both share the
-    same number of elements along a shared axis.
+    When subtracting a coordinate from a cube, they must both share the same
+    number of elements along a shared axis.
 
-    Args:
+    Parameters
+    ----------
+    cube : iris.cube.Cube
+        Cube from which to subtract.
+    other : iris.cube.Cube, iris.coords.Coord, number, numpy.ndarray or dask.array.Array
+        Object to subtract from the cube.
+    dim : int, optional
+        If `other` is a coord which does not exist on the cube, specify the
+        dimension to which it should be mapped.
+    in_place : bool, default=False
+        If `True`, alters the input cube.  Otherwise a new cube is created.
 
-    * cube:
-        An instance of :class:`iris.cube.Cube`.
-    * other:
-        An instance of :class:`iris.cube.Cube` or :class:`iris.coords.Coord`,
-        or a number or :class:`numpy.ndarray`.
+    Returns
+    -------
+    iris.cube.Cube
 
-    Kwargs:
-
-    * dim:
-        If supplying a coord with no match on the cube, you must supply
-        the dimension to process.
-    * in_place:
-        Whether to create a new Cube, or alter the given "cube".
-
-    Returns:
-        An instance of :class:`iris.cube.Cube`.
+    Notes
+    -----
+    This function maintains laziness when called; it does not realise data.
+    See more at :doc:`/userguide/real_and_lazy_data`.
 
     """
     _assert_is_cube(cube)
-    new_dtype = _output_dtype(operator.sub, cube.dtype, _get_dtype(other),
-                              in_place=in_place)
+    new_dtype = _output_dtype(
+        operator.sub,
+        cube.dtype,
+        second_dtype=_get_dtype(other),
+        in_place=in_place,
+    )
     if in_place:
-        _inplace_common_checks(cube, other, 'subtraction')
+        _inplace_common_checks(cube, other, "subtraction")
         op = operator.isub
     else:
         op = operator.sub
-    return _add_subtract_common(op, 'subtract', cube, other, new_dtype,
-                                dim=dim, in_place=in_place)
+    return _add_subtract_common(
+        op, "subtract", cube, other, new_dtype, dim=dim, in_place=in_place
+    )
 
 
-def _add_subtract_common(operation_function, operation_name, cube, other,
-                         new_dtype, dim=None, in_place=False):
-    """
-    Function which shares common code between addition and subtraction
-    of cubes.
+def _add_subtract_common(
+    operation_function,
+    operation_name,
+    cube,
+    other,
+    new_dtype,
+    dim=None,
+    in_place=False,
+):
+    """Share common code between addition and subtraction of cubes.
 
-    operation_function   - function which does the operation
-                           (e.g. numpy.subtract)
-    operation_name       - the public name of the operation (e.g. 'divide')
-    cube                 - the cube whose data is used as the first argument
-                           to `operation_function`
-    other                - the cube, coord, ndarray or number whose data is
-                           used as the second argument
-    new_dtype            - the expected dtype of the output. Used in the
-                           case of scalar masked arrays
-    dim                  - dimension along which to apply `other` if it's a
-                           coordinate that is not found in `cube`
-    in_place             - whether or not to apply the operation in place to
-                           `cube` and `cube.data`
+    Parameters
+    ----------
+    operation_function :
+        Function which does the operation (e.g. numpy.subtract).
+    operation_name :
+        The public name of the operation (e.g. 'divide').
+    cube :
+        The cube whose data is used as the first argument to `operation_function`.
+    other :
+        The cube, coord, ndarray, dask array or number whose
+        data is used as the second argument.
+    new_dtype :
+        The expected dtype of the output. Used in the case of scalar
+        masked arrays.
+    dim : optional
+        Dimension along which to apply `other` if it's a coordinate that is not
+        found in `cube`.
+    in_place : bool, default=False
+        Whether or not to apply the operation in place to `cube` and `cube.data`.
 
     """
     _assert_is_cube(cube)
-    _assert_matching_units(cube, other, operation_name)
 
-    if isinstance(other, iris.cube.Cube):
-        # get a coordinate comparison of this cube and the cube to do the
-        # operation with
-        coord_comp = iris.analysis.coord_comparison(cube, other)
+    if cube.units != getattr(other, "units", cube.units):
+        emsg = (
+            f"Cannot use {operation_name!r} with differing units "
+            f"({cube.units} & {other.units})"
+        )
+        raise iris.exceptions.NotYetImplementedError(emsg)
 
-        bad_coord_grps = (coord_comp['ungroupable_and_dimensioned'] +
-                          coord_comp['resamplable'])
-        if bad_coord_grps:
-            raise ValueError('This operation cannot be performed as there are '
-                             'differing coordinates (%s) remaining '
-                             'which cannot be ignored.'
-                             % ', '.join({coord_grp.name() for coord_grp
-                                          in bad_coord_grps}))
-    else:
-        coord_comp = None
+    result = _binary_op_common(
+        operation_function,
+        operation_name,
+        cube,
+        other,
+        cube.units,
+        new_dtype=new_dtype,
+        dim=dim,
+        in_place=in_place,
+    )
 
-    new_cube = _binary_op_common(operation_function, operation_name, cube,
-                                 other, cube.units, new_dtype=new_dtype,
-                                 dim=dim, in_place=in_place)
-
-    if coord_comp:
-        # If a coordinate is to be ignored - remove it
-        ignore = filter(None, [coord_grp[0] for coord_grp
-                               in coord_comp['ignorable']])
-        for coord in ignore:
-            new_cube.remove_coord(coord)
-
-    return new_cube
+    return result
 
 
+@_lenient_client(services=SERVICES)
 def multiply(cube, other, dim=None, in_place=False):
-    """
-    Calculate the product of a cube and another cube or coordinate.
+    """Calculate the product.
 
-    Args:
+    Calculate the product of two cubes, or the product of a cube and a coordinate
+    or array or scalar value.
 
-    * cube:
-        An instance of :class:`iris.cube.Cube`.
-    * other:
-        An instance of :class:`iris.cube.Cube` or :class:`iris.coords.Coord`,
-        or a number or :class:`numpy.ndarray`.
+    When multiplying two cubes, they must both have the same coordinate systems
+    and data resolution.
 
-    Kwargs:
+    When mulplying a cube by a coordinate, they must both share the same number
+    of elements along a shared axis.
 
-    * dim:
-        If supplying a coord with no match on the cube, you must supply
-        the dimension to process.
+    Parameters
+    ----------
+    cube : iris.cube.Cube
+        First operand to multiply.
+    other : iris.cube.Cube, iris.coords.Coord, number, numpy.ndarray or dask.array.Array
+        Second operand to multiply.
+    dim : int, optional
+        If `other` is a coord which does not exist on the cube, specify the
+        dimension to which it should be mapped.
+    in_place : bool, default=False
+        If `True`, alters the input cube.  Otherwise a new cube is created.
 
-    Returns:
-        An instance of :class:`iris.cube.Cube`.
+    Returns
+    -------
+    iris.cube.Cube
 
+    Notes
+    -----
+    This function maintains laziness when called; it does not realise data.
+    See more at :doc:`/userguide/real_and_lazy_data`.
     """
     _assert_is_cube(cube)
-    new_dtype = _output_dtype(operator.mul, cube.dtype, _get_dtype(other),
-                              in_place=in_place)
-    other_unit = getattr(other, 'units', '1')
+
+    new_dtype = _output_dtype(
+        operator.mul,
+        cube.dtype,
+        second_dtype=_get_dtype(other),
+        in_place=in_place,
+    )
+    other_unit = getattr(other, "units", "1")
     new_unit = cube.units * other_unit
+
     if in_place:
-        _inplace_common_checks(cube, other, 'multiplication')
+        _inplace_common_checks(cube, other, "multiplication")
         op = operator.imul
     else:
         op = operator.mul
 
-    if isinstance(other, iris.cube.Cube):
-        # get a coordinate comparison of this cube and the cube to do the
-        # operation with
-        coord_comp = iris.analysis.coord_comparison(cube, other)
-        bad_coord_grps = (coord_comp['ungroupable_and_dimensioned'] +
-                          coord_comp['resamplable'])
-        if bad_coord_grps:
-            raise ValueError('This operation cannot be performed as there are '
-                             'differing coordinates (%s) remaining '
-                             'which cannot be ignored.'
-                             % ', '.join({coord_grp.name() for coord_grp
-                                          in bad_coord_grps}))
-    else:
-        coord_comp = None
+    result = _binary_op_common(
+        op,
+        "multiply",
+        cube,
+        other,
+        new_unit,
+        new_dtype=new_dtype,
+        dim=dim,
+        in_place=in_place,
+    )
 
-    new_cube = _binary_op_common(op, 'multiply', cube, other, new_unit,
-                                 new_dtype=new_dtype, dim=dim,
-                                 in_place=in_place)
-
-    if coord_comp:
-        # If a coordinate is to be ignored - remove it
-        ignore = filter(None, [coord_grp[0] for coord_grp
-                        in coord_comp['ignorable']])
-        for coord in ignore:
-            new_cube.remove_coord(coord)
-
-    return new_cube
+    return result
 
 
 def _inplace_common_checks(cube, other, math_op):
-    """
+    """Check if an inplace math operation can take place.
+
     Check whether an inplace math operation can take place between `cube` and
     `other`. It cannot if `cube` has integer data and `other` has float data
     as the operation will always produce float data that cannot be 'safely'
@@ -436,88 +439,96 @@ def _inplace_common_checks(cube, other, math_op):
 
     """
     other_dtype = _get_dtype(other)
-    if not np.can_cast(other_dtype, cube.dtype, 'same_kind'):
-            aemsg = ('Cannot perform inplace {} between {!r} '
-                     'with {} data and {!r} with {} data.')
-            raise ArithmeticError(
-                aemsg.format(math_op, cube, cube.dtype, other, other_dtype))
+    if not np.can_cast(other_dtype, cube.dtype, "same_kind"):
+        aemsg = (
+            "Cannot perform inplace {} between {!r} "
+            "with {} data and {!r} with {} data."
+        )
+        raise ArithmeticError(
+            aemsg.format(math_op, cube, cube.dtype, other, other_dtype)
+        )
 
 
+@_lenient_client(services=SERVICES)
 def divide(cube, other, dim=None, in_place=False):
-    """
-    Calculate the division of a cube by a cube or coordinate.
+    """Calculate the ratio.
 
-    Args:
+    Calculate the ratio of two cubes, or the ratio of a cube and a coordinate
+    or array or scalar value.
 
-    * cube:
-        An instance of :class:`iris.cube.Cube`.
-    * other:
-        An instance of :class:`iris.cube.Cube` or :class:`iris.coords.Coord`,
-        or a number or :class:`numpy.ndarray`.
+    When dividing a cube by another cube, they must both have the same coordinate
+    systems and data resolution.
 
-    Kwargs:
+    When dividing a cube by a coordinate, they must both share the same number
+    of elements along a shared axis.
 
-    * dim:
-        If supplying a coord with no match on the cube, you must supply
-        the dimension to process.
+    Parameters
+    ----------
+    cube : iris.cube.Cube
+        Numerator.
+    other : iris.cube.Cube, iris.coords.Coord, number, numpy.ndarray or dask.array.Array
+        Denominator.
+    dim : int, optional
+        If `other` is a coord which does not exist on the cube, specify the
+        dimension to which it should be mapped.
+    in_place : bool, default=False
+        If `True`, alters the input cube.  Otherwise a new cube is created.
 
-    Returns:
-        An instance of :class:`iris.cube.Cube`.
+    Returns
+    -------
+    iris.cube.Cube
+
+    Notes
+    -----
+    This function maintains laziness when called; it does not realise data.
+    See more at :doc:`/userguide/real_and_lazy_data`.
 
     """
     _assert_is_cube(cube)
-    new_dtype = _output_dtype(operator.truediv,
-                              cube.dtype, _get_dtype(other), in_place=in_place)
-    other_unit = getattr(other, 'units', '1')
+
+    new_dtype = _output_dtype(
+        operator.truediv,
+        cube.dtype,
+        second_dtype=_get_dtype(other),
+        in_place=in_place,
+    )
+    other_unit = getattr(other, "units", "1")
     new_unit = cube.units / other_unit
+
     if in_place:
-        if cube.dtype.kind in 'iu':
+        if cube.dtype.kind in "iu":
             # Cannot coerce float result from inplace division back to int.
-            aemsg = ('Cannot perform inplace division of cube {!r} '
-                     'with integer data.')
-            raise ArithmeticError(aemsg)
+            emsg = (
+                f"Cannot perform inplace division of cube {cube.name()!r} "
+                "with integer data."
+            )
+            raise ArithmeticError(emsg)
         op = operator.itruediv
     else:
         op = operator.truediv
 
-    if isinstance(other, iris.cube.Cube):
-        # get a coordinate comparison of this cube and the cube to do the
-        # operation with
-        coord_comp = iris.analysis.coord_comparison(cube, other)
-        bad_coord_grps = (coord_comp['ungroupable_and_dimensioned'] +
-                          coord_comp['resamplable'])
-        if bad_coord_grps:
-            raise ValueError('This operation cannot be performed as there are '
-                             'differing coordinates (%s) remaining '
-                             'which cannot be ignored.'
-                             % ', '.join({coord_grp.name() for coord_grp
-                                          in bad_coord_grps}))
-    else:
-        coord_comp = None
+    result = _binary_op_common(
+        op,
+        "divide",
+        cube,
+        other,
+        new_unit,
+        new_dtype=new_dtype,
+        dim=dim,
+        in_place=in_place,
+    )
 
-    new_cube = _binary_op_common(op, 'divide', cube, other, new_unit,
-                                 new_dtype=new_dtype, dim=dim,
-                                 in_place=in_place)
-
-    if coord_comp:
-        # If a coordinate is to be ignored - remove it
-        ignore = filter(None, [coord_grp[0] for coord_grp
-                        in coord_comp['ignorable']])
-        for coord in ignore:
-            new_cube.remove_coord(coord)
-
-    return new_cube
+    return result
 
 
 def exponentiate(cube, exponent, in_place=False):
-    """
-    Returns the result of the given cube to the power of a scalar.
+    """Return the result of the given cube to the power of a scalar.
 
-    Args:
-
-    * cube:
+    Parameters
+    ----------
+    cube :
         An instance of :class:`iris.cube.Cube`.
-    * exponent:
+    exponent :
         The integer or floating point exponent.
 
         .. note:: When applied to the cube's unit, the exponent must
@@ -525,139 +536,168 @@ def exponentiate(cube, exponent, in_place=False):
             powers of the basic units.
 
             e.g. Unit('meter^-2 kilogram second^-1')
-
-    Kwargs:
-
-    * in_place:
+    in_place : bool, default=False
         Whether to create a new Cube, or alter the given "cube".
 
-    Returns:
-        An instance of :class:`iris.cube.Cube`.
+    Returns
+    -------
+    :class:`iris.cube.Cube`.
+
+    Notes
+    -----
+    This function maintains laziness when called; it does not realise data.
+    See more at :doc:`/userguide/real_and_lazy_data`.
 
     """
     _assert_is_cube(cube)
-    new_dtype = _output_dtype(operator.pow, cube.dtype, _get_dtype(exponent),
-                              in_place=in_place)
+    new_dtype = _output_dtype(
+        operator.pow,
+        cube.dtype,
+        second_dtype=_get_dtype(exponent),
+        in_place=in_place,
+    )
     if cube.has_lazy_data():
-        def power(data):
+
+        def power(data, out=None):
             return operator.pow(data, exponent)
+
     else:
+
         def power(data, out=None):
             return np.power(data, exponent, out)
 
-    return _math_op_common(cube, power, cube.units ** exponent, new_dtype,
-                           in_place=in_place)
+    return _math_op_common(
+        cube,
+        power,
+        cube.units**exponent,
+        new_dtype=new_dtype,
+        in_place=in_place,
+    )
 
 
 def exp(cube, in_place=False):
-    """
-    Calculate the exponential (exp(x)) of the cube.
+    """Calculate the exponential (exp(x)) of the cube.
 
-    Args:
-
-    * cube:
+    Parameters
+    ----------
+    cube :
         An instance of :class:`iris.cube.Cube`.
-
-    .. note::
-
-        Taking an exponential will return a cube with dimensionless units.
-
-    Kwargs:
-
-    * in_place:
+    in_place : bool, default=False
         Whether to create a new Cube, or alter the given "cube".
 
-    Returns:
-        An instance of :class:`iris.cube.Cube`.
+    Returns
+    -------
+    :class:`iris.cube.Cube`.
+
+    Notes
+    -----
+    Taking an exponential will return a cube with dimensionless units.
+
+    This function maintains laziness when called; it does not realise data.
+    See more at :doc:`/userguide/real_and_lazy_data`.
 
     """
     _assert_is_cube(cube)
     new_dtype = _output_dtype(np.exp, cube.dtype, in_place=in_place)
     op = da.exp if cube.has_lazy_data() else np.exp
-    return _math_op_common(cube, op, cf_units.Unit('1'), new_dtype,
-                           in_place=in_place)
+    return _math_op_common(
+        cube, op, cf_units.Unit("1"), new_dtype=new_dtype, in_place=in_place
+    )
 
 
 def log(cube, in_place=False):
-    """
-    Calculate the natural logarithm (base-e logarithm) of the cube.
+    """Calculate the natural logarithm (base-e logarithm) of the cube.
 
-    Args:
-
-    * cube:
+    Parameters
+    ----------
+    cube :
         An instance of :class:`iris.cube.Cube`.
-
-    Kwargs:
-
-    * in_place:
+    in_place : bool, default=False
         Whether to create a new Cube, or alter the given "cube".
 
-    Returns:
-        An instance of :class:`iris.cube.Cube`.
+    Returns
+    -------
+    :class:`iris.cube.Cube`
+
+    Notes
+    -----
+    This function maintains laziness when called; it does not realise data.
+    See more at :doc:`/userguide/real_and_lazy_data`.
 
     """
     _assert_is_cube(cube)
     new_dtype = _output_dtype(np.log, cube.dtype, in_place=in_place)
     op = da.log if cube.has_lazy_data() else np.log
-    return _math_op_common(cube, op, cube.units.log(math.e), new_dtype,
-                           in_place=in_place)
+    return _math_op_common(
+        cube,
+        op,
+        cube.units.log(math.e),
+        new_dtype=new_dtype,
+        in_place=in_place,
+    )
 
 
 def log2(cube, in_place=False):
-    """
-    Calculate the base-2 logarithm of the cube.
+    """Calculate the base-2 logarithm of the cube.
 
-    Args:
-
-    * cube:
+    Parameters
+    ----------
+    cube :
         An instance of :class:`iris.cube.Cube`.
-
-    Kwargs:lib/iris/tests/unit/analysis/maths/test_subtract.py
-
-    * in_place:
+    in_place : bool, default=False
         Whether to create a new Cube, or alter the given "cube".
 
-    Returns:
-        An instance of :class:`iris.cube.Cube`.
+    Returns
+    -------
+    :class:`iris.cube.Cube`
+
+    Notes
+    -----
+    This function maintains laziness when called; it does not realise data.
+    See more at :doc:`/userguide/real_and_lazy_data`.
 
     """
     _assert_is_cube(cube)
     new_dtype = _output_dtype(np.log2, cube.dtype, in_place=in_place)
     op = da.log2 if cube.has_lazy_data() else np.log2
-    return _math_op_common(cube, op, cube.units.log(2), new_dtype,
-                           in_place=in_place)
+    return _math_op_common(
+        cube, op, cube.units.log(2), new_dtype=new_dtype, in_place=in_place
+    )
 
 
 def log10(cube, in_place=False):
-    """
-    Calculate the base-10 logarithm of the cube.
+    """Calculate the base-10 logarithm of the cube.
 
-    Args:
-
-    * cube:
+    Parameters
+    ----------
+    cube :
         An instance of :class:`iris.cube.Cube`.
-
-    Kwargs:
-
-    * in_place:
+    in_place : bool, default=False
         Whether to create a new Cube, or alter the given "cube".
 
-    Returns:
-        An instance of :class:`iris.cube.Cube`.
+    Returns
+    -------
+    :class:`iris.cube.Cube`.
+
+    Notes
+    -----
+    This function maintains laziness when called; it does not realise data.
+    See more at :doc:`/userguide/real_and_lazy_data`.
 
     """
     _assert_is_cube(cube)
     new_dtype = _output_dtype(np.log10, cube.dtype, in_place=in_place)
     op = da.log10 if cube.has_lazy_data() else np.log10
-    return _math_op_common(cube, op, cube.units.log(10), new_dtype,
-                           in_place=in_place)
+    return _math_op_common(
+        cube, op, cube.units.log(10), new_dtype=new_dtype, in_place=in_place
+    )
 
 
-def apply_ufunc(ufunc, cube, other_cube=None, new_unit=None, new_name=None,
-                in_place=False):
-    """
+def apply_ufunc(ufunc, cube, other=None, new_unit=None, new_name=None, in_place=False):
+    """Apply a `numpy universal function <https://docs.scipy.org/doc/numpy/reference/ufuncs.html>`_ to a cube.
+
     Apply a `numpy universal function
-    <http://docs.scipy.org/doc/numpy/reference/ufuncs.html>`_ to a cube
+    <https://docs.scipy.org/doc/numpy/reference/ufuncs.html>`_ to a cube
     or pair of cubes.
 
     .. note:: Many of the numpy.ufunc have been implemented explicitly in Iris
@@ -666,126 +706,214 @@ def apply_ufunc(ufunc, cube, other_cube=None, new_unit=None, new_name=None,
         It is usually preferable to use these functions rather than
         :func:`iris.analysis.maths.apply_ufunc` where possible.
 
-    Args:
-
-    * ufunc:
+    Parameters
+    ----------
+    ufunc :
         An instance of :func:`numpy.ufunc` e.g. :func:`numpy.sin`,
         :func:`numpy.mod`.
-
-    * cube:
+    cube :
         An instance of :class:`iris.cube.Cube`.
-
-    Kwargs:
-
-    * other_cube:
+    other : :class:`iris.cube.Cube`, optional
         An instance of :class:`iris.cube.Cube` to be given as the second
         argument to :func:`numpy.ufunc`.
-
-    * new_unit:
+    new_unit : optional
         Unit for the resulting Cube.
-
-    * new_name:
+    new_name : optional
         Name for the resulting Cube.
-
-    * in_place:
+    in_place : bool, default=False
         Whether to create a new Cube, or alter the given "cube".
 
-    Returns:
-        An instance of :class:`iris.cube.Cube`.
+    Returns
+    -------
+    :class:`iris.cube.Cube`.
 
-    Example::
+    Examples
+    --------
+    ::
 
         cube = apply_ufunc(numpy.sin, cube, in_place=True)
 
+    .. note::
+
+        This function maintains laziness when called; it does not realise data. This is dependent on `ufunc` argument
+        being a numpy operation that is compatible with lazy operation.
+        See more at :doc:`/userguide/real_and_lazy_data`.
+
     """
-
     if not isinstance(ufunc, np.ufunc):
-        name = getattr(ufunc, '__name__', 'function passed to apply_ufunc')
+        ufunc_name = getattr(ufunc, "__name__", "function passed to apply_ufunc")
+        emsg = f"{ufunc_name} is not recognised, it is not an instance of numpy.ufunc"
+        raise TypeError(emsg)
 
-        raise TypeError('{} is not recognised (it is not an instance of '
-                        'numpy.ufunc)'.format(name))
+    ufunc_name = ufunc.__name__
 
     if ufunc.nout != 1:
-        raise ValueError('{} returns {} objects, apply_ufunc currently '
-                         'only supports ufunc functions returning a single '
-                         'object.'.format(ufunc.__name__, ufunc.nout))
+        emsg = (
+            f"{ufunc_name} returns {ufunc.nout} objects, apply_ufunc currently "
+            "only supports numpy.ufunc functions returning a single object."
+        )
+        raise ValueError(emsg)
 
-    if ufunc.nin == 2:
-        if other_cube is None:
-            raise ValueError('{} requires two arguments, so other_cube '
-                             'must also be passed to apply_ufunc'.format(
-                                 ufunc.__name__))
+    if ufunc.nin == 1:
+        if other is not None:
+            dmsg = (
+                "ignoring surplus 'other' argument to apply_ufunc, "
+                f"provided ufunc {ufunc_name!r} only requires 1 input"
+            )
+            logger.debug(dmsg)
 
-        _assert_is_cube(other_cube)
-        new_dtype = _output_dtype(ufunc, cube.dtype, other_cube.dtype,
-                                  in_place=in_place)
-
-        new_cube = _binary_op_common(ufunc, ufunc.__name__, cube, other_cube,
-                                     new_unit, new_dtype=new_dtype,
-                                     in_place=in_place)
-
-    elif ufunc.nin == 1:
         new_dtype = _output_dtype(ufunc, cube.dtype, in_place=in_place)
 
-        new_cube = _math_op_common(cube, ufunc, new_unit, new_dtype,
-                                   in_place=in_place)
+        new_cube = _math_op_common(
+            cube, ufunc, new_unit, new_dtype=new_dtype, in_place=in_place
+        )
+    elif ufunc.nin == 2:
+        if other is None:
+            emsg = (
+                f"{ufunc_name} requires two arguments, another cube "
+                "must also be passed to apply_ufunc."
+            )
+            raise ValueError(emsg)
 
+        _assert_is_cube(other)
+        new_dtype = _output_dtype(
+            ufunc, cube.dtype, second_dtype=other.dtype, in_place=in_place
+        )
+
+        new_cube = _binary_op_common(
+            ufunc,
+            ufunc_name,
+            cube,
+            other,
+            new_unit,
+            new_dtype=new_dtype,
+            in_place=in_place,
+        )
     else:
-        raise ValueError(ufunc.__name__ + ".nin should be 1 or 2.")
+        emsg = f"Provided ufunc '{ufunc_name}.nin' must be 1 or 2."
+        raise ValueError(emsg)
 
     new_cube.rename(new_name)
 
     return new_cube
 
 
-def _binary_op_common(operation_function, operation_name, cube, other,
-                      new_unit, new_dtype=None, dim=None, in_place=False):
-    """
-    Function which shares common code between binary operations.
+def _binary_op_common(
+    operation_function,
+    operation_name,
+    cube,
+    other,
+    new_unit,
+    new_dtype=None,
+    dim=None,
+    in_place=False,
+    sanitise_metadata=True,
+):
+    """Share common code between binary operations.
 
-    operation_function   - function which does the operation
-                           (e.g. numpy.divide)
-    operation_name       - the public name of the operation (e.g. 'divide')
-    cube                 - the cube whose data is used as the first argument
-                           to `operation_function`
-    other                - the cube, coord, ndarray or number whose data is
-                           used as the second argument
-    new_dtype            - the expected dtype of the output. Used in the
-                           case of scalar masked arrays
-    new_unit             - unit for the resulting quantity
-    dim                  - dimension along which to apply `other` if it's a
-                           coordinate that is not found in `cube`
-    in_place             - whether or not to apply the operation in place to
-                           `cube` and `cube.data`
+    Parameters
+    ----------
+    operation_function :
+        Function which does the operation (e.g. numpy.divide).
+    operation_name :
+        The public name of the operation (e.g. 'divide').
+    cube :
+        The cube whose data is used as the first argument to `operation_function`.
+    other :
+        The cube, coord, ndarray, dask array or number whose data is used
+        as the second argument.
+    new_unit : optional
+        Unit for the resulting quantity.
+    new_dtype :
+        The expected dtype of the output. Used in the case of scalar masked arrays.
+    dim : optional
+        Dimension along which to apply `other` if it's a coordinate that is
+        not found in `cube`.
+    in_place : bool, default=False
+        Whether or not to apply the operation in place to `cube` and `cube.data`.
+    sanitise_metadata : bool, default=True
+        Whether or not to remove metadata using _sanitise_metadata function.
+
     """
+    from iris.cube import Cube
+
     _assert_is_cube(cube)
+
+    # Flag to notify the _math_op_common function to simply wrap the resultant
+    # data of the maths operation in a cube with no metadata.
+    skeleton_cube = False
+
     if isinstance(other, iris.coords.Coord):
-        other = _broadcast_cube_coord_data(cube, other, operation_name, dim)
-    elif isinstance(other, iris.cube.Cube):
-        try:
-            broadcast_shapes(cube.shape, other.shape)
-        except ValueError:
-            other = iris.util.as_compatible_shape(other, cube)
-        other = other.core_data()
+        # The rhs must be an array.
+        rhs = _broadcast_cube_coord_data(cube, other, operation_name, dim=dim)
+    elif isinstance(other, Cube):
+        # Prepare to resolve the cube operands and associated coordinate
+        # metadata into the resultant cube.
+        resolver = Resolve(cube, other)
+
+        # Get the broadcast, auto-transposed safe versions of the cube operands.
+        cube = resolver.lhs_cube_resolved
+        other = resolver.rhs_cube_resolved
+
+        # Flag that it's safe to wrap the resultant data of the math operation
+        # in a cube with no metadata, as all of the metadata of the resultant
+        # cube is being managed by the resolver.
+        skeleton_cube = True
+
+        # The rhs must be an array.
+        rhs = other.core_data()
     else:
-        other = np.asanyarray(other)
+        # The rhs must be an array.
+        if iris._lazy_data.is_lazy_data(other):
+            rhs = other
+        else:
+            rhs = np.asanyarray(other)
 
-    # don't worry about checking for other data types (such as scalars or
-    # np.ndarrays) because _assert_compatible validates that they are broadcast
-    # compatible with cube.data
-    _assert_compatible(cube, other)
-
-    def unary_func(x):
-        ret = operation_function(x, other)
-        if ret is NotImplemented:
-            # explicitly raise the TypeError, so it gets raised even if, for
+    def unary_func(lhs):
+        data = operation_function(lhs, rhs)
+        if data is NotImplemented:
+            # Explicitly raise the TypeError, so it gets raised even if, for
             # example, `iris.analysis.maths.multiply(cube, other)` is called
-            # directly instead of `cube * other`
-            raise TypeError('cannot %s %r and %r objects' %
-                            (operation_function.__name__, type(x).__name__,
-                             type(other).__name__))
-        return ret
-    return _math_op_common(cube, unary_func, new_unit, new_dtype, in_place)
+            # directly instead of `cube * other`.
+            emsg = (
+                f"Cannot {operation_function.__name__} {type(lhs).__name__!r} "
+                f"and {type(rhs).__name__} objects."
+            )
+            raise TypeError(emsg)
+        return data
+
+    if in_place and not cube.has_lazy_data():
+        # In-place arithmetic doesn't work if array type of LHS is less complex
+        # than RHS.
+        if iris._lazy_data.is_lazy_data(rhs):
+            cube.data = cube.lazy_data()
+        elif ma.is_masked(rhs) and not isinstance(cube.data, ma.MaskedArray):
+            cube.data = ma.array(cube.data)
+
+    elif isinstance(cube.core_data(), ma.MaskedArray) and iris._lazy_data.is_lazy_data(
+        rhs
+    ):
+        # Workaround for #2987.  numpy#15200 discusses the general problem.
+        cube = cube.copy(cube.lazy_data())
+
+    result = _math_op_common(
+        cube,
+        unary_func,
+        new_unit,
+        new_dtype=new_dtype,
+        in_place=in_place,
+        skeleton_cube=skeleton_cube,
+        sanitise_metadata=sanitise_metadata,
+    )
+
+    if isinstance(other, Cube):
+        # Insert the resultant data from the maths operation
+        # within the resolved cube.
+        result = resolver.cube(result.core_data(), in_place=in_place)
+        if sanitise_metadata:
+            _sanitise_metadata(result, new_unit)
+
+    return result
 
 
 def _broadcast_cube_coord_data(cube, other, operation_name, dim=None):
@@ -803,16 +931,20 @@ def _broadcast_cube_coord_data(cube, other, operation_name, dim=None):
                 coord_dims = cube.coord_dims(other)
                 data_dimension = coord_dims[0] if coord_dims else None
             except iris.exceptions.CoordinateNotFoundError:
-                raise ValueError("Could not determine dimension for %s. "
-                                 "Use %s(cube, coord, dim=dim)"
-                                 % (operation_name, operation_name))
+                raise ValueError(
+                    "Could not determine dimension for %s. "
+                    "Use %s(cube, coord, dim=dim)" % (operation_name, operation_name)
+                )
 
     if other.ndim != 1:
         raise iris.exceptions.CoordinateMultiDimError(other)
 
     if other.has_bounds():
-        warnings.warn('Using {!r} with a bounded coordinate is not well '
-                      'defined; ignoring bounds.'.format(operation_name))
+        warnings.warn(
+            "Using {!r} with a bounded coordinate is not well "
+            "defined; ignoring bounds.".format(operation_name),
+            category=iris.warnings.IrisIgnoringBoundsWarning,
+        )
 
     points = other.points
 
@@ -826,63 +958,106 @@ def _broadcast_cube_coord_data(cube, other, operation_name, dim=None):
     return points
 
 
-def _math_op_common(cube, operation_function, new_unit, new_dtype=None,
-                    in_place=False):
+def _sanitise_metadata(cube, unit):
+    """Clear appropriate metadata from the resultant cube.
+
+    As part of the maths metadata contract, clear the necessary or
+    unsupported metadata from the resultant cube of the maths operation.
+
+    """
+    # Clear the cube names.
+    cube.rename(None)
+
+    # Clear the cube cell methods.
+    cube.cell_methods = None
+
+    # Clear the cell measures.
+    for cm in cube.cell_measures():
+        cube.remove_cell_measure(cm)
+
+    # Clear the ancillary variables.
+    for av in cube.ancillary_variables():
+        cube.remove_ancillary_variable(av)
+
+    # Clear the STASH attribute, if present.
+    if "STASH" in cube.attributes:
+        del cube.attributes["STASH"]
+
+    # Set the cube units.
+    cube.units = unit
+
+
+def _math_op_common(
+    cube,
+    operation_function,
+    new_unit,
+    new_dtype=None,
+    in_place=False,
+    skeleton_cube=False,
+    sanitise_metadata=True,
+):
+    from iris.cube import Cube
+
     _assert_is_cube(cube)
 
-    if in_place:
-        new_cube = cube
+    if in_place and not skeleton_cube:
         if cube.has_lazy_data():
-            new_cube.data = operation_function(cube.lazy_data())
+            cube.data = operation_function(cube.lazy_data())
         else:
             try:
                 operation_function(cube.data, out=cube.data)
             except TypeError:
-                # Non ufunc function
+                # Non-ufunc function
                 operation_function(cube.data)
+        new_cube = cube
     else:
-        new_cube = cube.copy(data=operation_function(cube.core_data()))
+        data = operation_function(cube.core_data())
+        if skeleton_cube:
+            # Simply wrap the resultant data in a cube, as no
+            # cube metadata is required by the caller.
+            new_cube = Cube(data)
+        else:
+            new_cube = cube.copy(data)
 
-    # If the result of the operation is scalar and masked, we need to fix up
-    # the dtype
-    if new_dtype is not None \
-            and not new_cube.has_lazy_data() \
-            and new_cube.data.shape == () \
-            and ma.is_masked(new_cube.data):
+    # If the result of the operation is scalar and masked, we need to fix-up the dtype.
+    if (
+        new_dtype is not None
+        and not new_cube.has_lazy_data()
+        and new_cube.data.shape == ()
+        and ma.is_masked(new_cube.data)
+    ):
         new_cube.data = ma.masked_array(0, 1, dtype=new_dtype)
 
-    iris.analysis.clear_phenomenon_identity(new_cube)
-    new_cube.units = new_unit
+    if sanitise_metadata:
+        _sanitise_metadata(new_cube, new_unit)
+
     return new_cube
 
 
-class IFunc(object):
-    """
-    :class:`IFunc` class for functions that can be applied to an iris cube.
-    """
+class IFunc:
+    """:class:`IFunc` class for functions that can be applied to an iris cube."""
+
     def __init__(self, data_func, units_func):
-        """
-        Create an ifunc from a data function and units function.
+        """Create an ifunc from a data function and units function.
 
-        Args:
-
-        * data_func:
-
+        Parameters
+        ----------
+        data_func :
             Function to be applied to one or two data arrays, which
             are given as positional arguments. Should return another
             data array, with the same shape as the first array.
-
-            Can also have keyword arguments.
-
-        * units_func:
-
-            Function to calculate the unit of the resulting cube.
-            Should take the cube(s) as input and return
+            May also have keyword arguments.
+        units_func :
+            Function to calculate the units of the resulting cube.
+            Should take the cube/s as input and return
             an instance of :class:`cf_units.Unit`.
 
-        Returns:
-            An ifunc.
+        Returns
+        -------
+        ifunc
 
+        Examples
+        --------
         **Example usage 1** Using an existing numpy ufunc, such as numpy.sin
         for the data function and a simple lambda function for the units
         function::
@@ -913,80 +1088,101 @@ class IFunc(object):
             cs_ifunc = iris.analysis.maths.IFunc(numpy.cumsum,
                 lambda a: a.units)
             cs_cube = cs_ifunc(cube, axis=1)
-        """
 
-        if hasattr(data_func, 'nin'):
+        """
+        self._data_func_name = getattr(
+            data_func, "__name__", "data_func argument passed to IFunc"
+        )
+
+        if not callable(data_func):
+            emsg = f"{self._data_func_name} is not callable."
+            raise TypeError(emsg)
+
+        self._unit_func_name = getattr(
+            units_func, "__name__", "units_func argument passed to IFunc"
+        )
+
+        if not callable(units_func):
+            emsg = f"{self._unit_func_name} is not callable."
+            raise TypeError(emsg)
+
+        if hasattr(data_func, "nin"):
             self.nin = data_func.nin
         else:
-            if six.PY2:
-                (args, _, _, defaults) = inspect.getargspec(data_func)
-                self.nin = len(args) - (
-                    len(defaults) if defaults is not None else 0)
-            else:
-                sig = inspect.signature(data_func)
-                args = [param for param in sig.parameters.values()
-                        if (param.kind != param.KEYWORD_ONLY and
-                            param.default is param.empty)]
-                self.nin = len(args)
+            sig = inspect.signature(data_func)
+            args = [
+                param
+                for param in sig.parameters.values()
+                if (param.kind != param.KEYWORD_ONLY and param.default is param.empty)
+            ]
+            self.nin = len(args)
 
         if self.nin not in [1, 2]:
-            msg = ('{} requires {} input data arrays, the IFunc class '
-                   'currently only supports functions requiring 1 or two '
-                   'data arrays as input.')
-            raise ValueError(msg.format(data_func.__name__, self.nin))
+            emsg = (
+                f"{self._data_func_name} requires {self.nin} input data "
+                "arrays, the IFunc class currently only supports functions "
+                "requiring 1 or 2 data arrays as input."
+            )
+            raise ValueError(emsg)
 
-        if hasattr(data_func, 'nout'):
+        if hasattr(data_func, "nout"):
             if data_func.nout != 1:
-                msg = ('{} returns {} objects, the IFunc class currently '
-                       'only supports functions returning a single object.')
-                raise ValueError(msg.format(data_func.__name__,
-                                            data_func.nout))
+                emsg = (
+                    f"{self._data_func_name} returns {data_func.nout} objects, "
+                    "the IFunc class currently only supports functions "
+                    "returning a single object."
+                )
+                raise ValueError(emsg)
 
         self.data_func = data_func
-
         self.units_func = units_func
 
     def __repr__(self):
-        return 'iris.analysis.maths.IFunc({}, {})'.format(
-            self.data_func.__name__, self.units_func.__name__)
+        result = (
+            f"iris.analysis.maths.IFunc({self._data_func_name}, "
+            f"{self._unit_func_name})"
+        )
+        return result
 
     def __str__(self):
-        return ('IFunc constructed from the data function {} '
-                'and the units function {}'.format(
-                    self.data_func.__name__, self.units_func.__name__))
+        result = (
+            f"IFunc constructed from the data function {self._data_func_name} "
+            f"and the units function {self._unit_func_name}"
+        )
+        return result
 
-    def __call__(self, cube, other=None, dim=None, in_place=False,
-                 new_name=None, **kwargs_data_func):
-        """
-        Applies the ifunc to the cube(s).
+    def __call__(
+        self,
+        cube,
+        other=None,
+        dim=None,
+        in_place=False,
+        new_name=None,
+        **kwargs_data_func,
+    ):
+        """Apply the ifunc to the cube(s).
 
-        Args:
-
-        * cube
+        Parameters
+        ----------
+        cube :
             An instance of :class:`iris.cube.Cube`, whose data is used
             as the first argument to the data function.
-
-        Kwargs:
-
-        * other
-            A cube, coord, ndarray or number whose data is used as the
+        other : optional
+            A cube, coord, ndarray, dask array or number whose data is used as the
             second argument to the data function.
-
-        * new_name:
-            Name for the resulting Cube.
-
-        * in_place:
-            Whether to create a new Cube, or alter the given "cube".
-
-        * dim:
+        dim : optional
             Dimension along which to apply `other` if it's a coordinate that is
-            not found in `cube`
-
-        * **kwargs_data_func:
+            not found in `cube`.
+        in_place : bool, default=False
+            Whether to create a new Cube, or alter the given "cube".
+        new_name : optional
+            Name for the resulting Cube.
+        **kwargs_data_func :
             Keyword arguments that get passed on to the data_func.
 
-        Returns:
-            An instance of :class:`iris.cube.Cube`.
+        Returns
+        -------
+        :class:`iris.cube.Cube`
 
         """
         _assert_is_cube(cube)
@@ -996,30 +1192,39 @@ class IFunc(object):
 
             return self.data_func(*args, **kwargs_combined)
 
-        if self.nin == 2:
-            if other is None:
-                raise ValueError(self.data_func.__name__ +
-                                 ' requires two arguments')
-
-            new_unit = self.units_func(cube, other)
-
-            new_cube = _binary_op_common(wrap_data_func,
-                                         self.data_func.__name__, cube, other,
-                                         new_unit, dim=dim,
-                                         in_place=in_place)
-
-        elif self.nin == 1:
+        if self.nin == 1:
             if other is not None:
-                raise ValueError(self.data_func.__name__ +
-                                 ' requires one argument')
+                dmsg = (
+                    "ignoring surplus 'other' argument to IFunc.__call__, "
+                    f"provided data_func {self._data_func_name!r} only requires "
+                    "1 input"
+                )
+                logger.debug(dmsg)
 
             new_unit = self.units_func(cube)
 
-            new_cube = _math_op_common(cube, wrap_data_func, new_unit,
-                                       in_place=in_place)
-
+            new_cube = _math_op_common(
+                cube, wrap_data_func, new_unit, in_place=in_place
+            )
         else:
-            raise ValueError('self.nin should be 1 or 2.')
+            if other is None:
+                emsg = (
+                    f"{self._data_func_name} requires two arguments, another "
+                    "cube must also be passed to IFunc.__call__."
+                )
+                raise ValueError(emsg)
+
+            new_unit = self.units_func(cube, other)
+
+            new_cube = _binary_op_common(
+                wrap_data_func,
+                self.data_func.__name__,
+                cube,
+                other,
+                new_unit,
+                dim=dim,
+                in_place=in_place,
+            )
 
         if new_name is not None:
             new_cube.rename(new_name)

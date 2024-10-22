@@ -1,34 +1,16 @@
-# (C) British Crown Copyright 2018 - 2019, Met Office
+# Copyright Iris contributors
 #
-# This file is part of Iris.
-#
-# Iris is free software: you can redistribute it and/or modify it under
-# the terms of the GNU Lesser General Public License as published by the
-# Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# Iris is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU Lesser General Public License for more details.
-#
-# You should have received a copy of the GNU Lesser General Public License
-# along with Iris.  If not, see <http://www.gnu.org/licenses/>.
+# This file is part of Iris and is released under the BSD license.
+# See LICENSE in the root of the repository for full licensing details.
 
-"""
-Definitions of how Iris objects should be represented.
+"""Definitions of how Iris objects should be represented."""
 
-"""
-
-from __future__ import (absolute_import, division, print_function)
-from six.moves import (filter, input, map, range, zip)  # noqa
-
+from html import escape
 import re
 
 
-class CubeRepresentation(object):
-    """
-    Produce representations of a :class:`~iris.cube.Cube`.
+class CubeRepresentation:
+    """Produce representations of a :class:`~iris.cube.Cube`.
 
     This includes:
 
@@ -96,31 +78,46 @@ class CubeRepresentation(object):
     def __init__(self, cube):
         self.cube = cube
         self.cube_id = id(self.cube)
-        self.cube_str = str(self.cube)
+        self.cube_str = escape(str(self.cube))
 
-        self.str_headings = {
-            'Dimension coordinates:': None,
-            'Auxiliary coordinates:': None,
-            'Derived coordinates:': None,
-            'Scalar coordinates:': None,
-            'Attributes:': None,
-            'Cell methods:': None,
+        # Define the expected vector and scalar sections in output, in expected
+        # order of appearance.
+        # NOTE: if we recoded this to use a CubeSummary, these section titles
+        # would be available from that.
+        self.vector_section_names = [
+            "Dimension coordinates:",
+            "Mesh coordinates:",
+            "Auxiliary coordinates:",
+            "Derived coordinates:",
+            "Cell measures:",
+            "Ancillary variables:",
+        ]
+        self.scalar_section_names = [
+            "Mesh:",
+            "Scalar coordinates:",
+            "Scalar cell measures:",
+            "Cell methods:",
+            "Attributes:",
+        ]
+        self.sections_data = {
+            name: None for name in self.vector_section_names + self.scalar_section_names
         }
-        self.dim_desc_coords = ['Dimension coordinates:',
-                                'Auxiliary coordinates:',
-                                'Derived coordinates:']
+        # 'Scalar-cell-measures' is currently alone amongst the scalar sections,
+        # in displaying only a 'name' and no 'value' field.
+        self.single_cell_section_names = ["Scalar cell measures:"]
 
         # Important content that summarises a cube is defined here.
         self.shapes = self.cube.shape
         self.scalar_cube = self.shapes == ()
         self.ndims = self.cube.ndim
 
-        self.name = self.cube.name().title().replace('_', ' ')
-        self.names = self._dim_names()
-        self.units = self.cube.units
+        self.name = escape(self.cube.name().title().replace("_", " "))
+        self.names = [escape(dim_name) for dim_name in self._dim_names()]
+        self.units = escape(str(self.cube.units))
 
     def _get_dim_names(self):
-        """
+        """Get dimension-describing coordinate names.
+
         Get dimension-describing coordinate names, or '--' if no coordinate]
         describes the dimension.
 
@@ -133,36 +130,36 @@ class CubeRepresentation(object):
         # Add the dim_coord names that participate in the associated data
         # dimensions.
         for dim in range(len(self.cube.shape)):
-            dim_coords = self.cube.coords(contains_dimension=dim,
-                                          dim_coords=True)
+            dim_coords = self.cube.coords(contains_dimension=dim, dim_coords=True)
             if dim_coords:
                 dim_names[dim] = dim_coords[0].name()
             else:
-                dim_names[dim] = '--'
+                dim_names[dim] = "--"
         return dim_names
 
     def _dim_names(self):
         if self.scalar_cube:
-            dim_names = ['(scalar cube)']
+            dim_names = ["(scalar cube)"]
         else:
             dim_names = self._get_dim_names()
         return dim_names
 
     def _get_lines(self):
-        return self.cube_str.split('\n')
+        return self.cube_str.split("\n")
 
     def _get_bits(self, bits):
-        """
+        """Parse the body content (`bits`) of the cube string.
+
         Parse the body content (`bits`) of the cube string in preparation for
         being converted into table rows.
 
         """
-        left_indent = re.split(r'\w+', bits[1])[0]
+        left_indent = re.split(r"\w+", bits[1])[0]
 
         # Get heading indices within the printout.
         start_inds = []
-        for hdg in self.str_headings.keys():
-            heading = '{}{}'.format(left_indent, hdg)
+        for hdg in self.sections_data.keys():
+            heading = "{}{}".format(left_indent, hdg)
             try:
                 start_ind = bits.index(heading)
             except ValueError:
@@ -176,137 +173,134 @@ class CubeRepresentation(object):
         for i0, i1 in zip(start_inds[:-1], start_inds[1:]):
             str_heading_name = bits[i0].strip()
             if i1 != 0:
-                content = bits[i0 + 1: i1]
+                content = bits[i0 + 1 : i1]
             else:
-                content = bits[i0 + 1:]
-            self.str_headings[str_heading_name] = content
+                content = bits[i0 + 1 :]
+            self.sections_data[str_heading_name] = content
 
     def _make_header(self):
-        """
+        """Make the table header.
+
         Make the table header. This is similar to the summary of the cube,
         but does not include dim shapes. These are included on the next table
         row down, and produced with `make_shapes_row`.
 
         """
         # Header row.
-        tlc_template = \
-            '<th class="iris iris-word-cell">{self.name} ({self.units})</th>'
+        tlc_template = '<th class="iris iris-word-cell">{self.name} ({self.units})</th>'
         top_left_cell = tlc_template.format(self=self)
         cells = ['<tr class="iris">', top_left_cell]
         for dim_name in self.names:
-            cells.append(
-                '<th class="iris iris-word-cell">{}</th>'.format(dim_name))
-        cells.append('</tr>')
-        return '\n'.join(cell for cell in cells)
+            cells.append('<th class="iris iris-word-cell">{}</th>'.format(dim_name))
+        cells.append("</tr>")
+        return "\n".join(cell for cell in cells)
 
     def _make_shapes_row(self):
         """Add a row to show data / dimensions shape."""
-        title_cell = \
-            '<td class="iris-word-cell iris-subheading-cell">Shape</td>'
+        title_cell = '<td class="iris-word-cell iris-subheading-cell">Shape</td>'
         cells = ['<tr class="iris">', title_cell]
         for shape in self.shapes:
-            cells.append(
-                '<td class="iris iris-inclusion-cell">{}</td>'.format(shape))
-        cells.append('</tr>')
-        return '\n'.join(cell for cell in cells)
+            cells.append('<td class="iris iris-inclusion-cell">{}</td>'.format(shape))
+        cells.append("</tr>")
+        return "\n".join(cell for cell in cells)
 
     def _make_row(self, title, body=None, col_span=0):
-        """
-        Produce one row for the table body; i.e.
-            <tr><td>Coord name</td><td>x</td><td>-</td>...</tr>
+        """Produce one row for the table body.
 
-        `body` contains the content for each cell not in the left-most (title)
-               column.
-               If None, indicates this row is a title row (see below).
-        `title` contains the row heading. If `body` is None, indicates
-                that the row contains a sub-heading;
-                e.g. 'Dimension coordinates:'.
-        `col_span` indicates how many columns the string should span.
+        Parameters
+        ----------
+        title : str, optional
+            Contains the row heading. If `body` is None, indicates
+            that the row contains a sub-heading;
+            e.g. 'Dimension coordinates:'.
+        body : str, optional
+            Contains the content for each cell not in the left-most (title) column.
+            If None, indicates this row is a title row (see below).
+        col_span : int, default=0
+            Indicates how many columns the string should span.
+
+        Examples
+        --------
+        ::
+
+            <tr><td>Coord name</td><td>x</td><td>-</td>...</tr>.
 
         """
         row = ['<tr class="iris">']
-        template = '    <td{html_cls}>{content}</td>'
+        template = "    <td{html_cls}>{content}</td>"
         if body is None:
             # This is a title row.
             # Strip off the trailing ':' from the title string.
             title = title.strip()[:-1]
             row.append(
-                template.format(html_cls=' class="iris-title iris-word-cell"',
-                                content=title))
+                template.format(
+                    html_cls=' class="iris-title iris-word-cell"',
+                    content=title,
+                )
+            )
             # Add blank cells for the rest of the rows.
             for _ in range(self.ndims):
-                row.append(template.format(html_cls=' class="iris-title"',
-                                           content=''))
+                row.append(template.format(html_cls=' class="iris-title"', content=""))
         else:
             # This is not a title row.
             # Deal with name of coord/attr etc. first.
-            sub_title = '\t{}'.format(title)
-            row.append(template.format(
-                html_cls=' class="iris-word-cell iris-subheading-cell"',
-                content=sub_title))
+            sub_title = "\t{}".format(title)
+            row.append(
+                template.format(
+                    html_cls=' class="iris-word-cell iris-subheading-cell"',
+                    content=sub_title,
+                )
+            )
             # One further item or more than that?
             if col_span != 0:
-                html_cls = ' class="{}" colspan="{}"'.format('iris-word-cell',
-                                                             col_span)
+                html_cls = ' class="{}" colspan="{}"'.format("iris-word-cell", col_span)
                 row.append(template.format(html_cls=html_cls, content=body))
             else:
                 # "Inclusion" - `x` or `-`.
                 for itm in body:
-                    row.append(template.format(
-                        html_cls=' class="iris-inclusion-cell"',
-                        content=itm))
-        row.append('</tr>')
+                    row.append(
+                        template.format(
+                            html_cls=' class="iris-inclusion-cell"',
+                            content=itm,
+                        )
+                    )
+        row.append("</tr>")
         return row
-
-    def _expand_last_cell(self, element, body):
-        '''Expand an element containing a cell by adding a new line.'''
-        split_point = element.index('</td>')
-        element = element[:split_point] + '<br>' + body + element[split_point:]
-        return element
 
     def _make_content(self):
         elements = []
-        for k, v in self.str_headings.items():
+        for k, v in self.sections_data.items():
             if v is not None:
                 # Add the sub-heading title.
                 elements.extend(self._make_row(k))
                 for line in v:
                     # Add every other row in the sub-heading.
-                    if k in self.dim_desc_coords:
-                        body = re.findall(r'[\w-]+', line)
+                    if k in self.vector_section_names:
+                        body = re.findall(r"[\w-]+", line)
                         title = body.pop(0)
                         colspan = 0
                     else:
-                        try:
-                            split_point = line.index(':')
-                        except ValueError:
-                            # When a line exists in v without a ':', we expect
-                            # that this is due to the value of some attribute
-                            # containing multiple lines. We collect all these
-                            # lines in the same cell.
-                            body = line.strip()
-                            # We choose the element containing the last cell
-                            # in the last row.
-                            element = elements[-2]
-                            element = self._expand_last_cell(element, body)
-                            elements[-2] = element
-                            continue
-                        else:
-                            title = line[:split_point].strip()
-                            body = line[split_point + 2:].strip()
                         colspan = self.ndims
-                    elements.extend(
-                        self._make_row(title, body=body, col_span=colspan))
-        return '\n'.join(element for element in elements)
+                        if k in self.single_cell_section_names:
+                            title = line.strip()
+                            body = ""
+                        else:
+                            line = line.strip()
+                            split_point = line.index(" ")
+                            title = line[:split_point].strip()
+                            body = line[split_point + 2 :].strip()
+
+                    elements.extend(self._make_row(title, body=body, col_span=colspan))
+        return "\n".join(element for element in elements)
 
     def repr_html(self):
-        """The `repr` interface for Jupyter."""
+        """Represent html, the `repr` interface for Jupyter."""
         # Deal with the header first.
         header = self._make_header()
 
         # Check if we have a scalar cube.
         if self.scalar_cube:
-            shape = ''
+            shape = ""
             # We still need a single content column!
             self.ndims = 1
         else:
@@ -317,18 +311,17 @@ class CubeRepresentation(object):
         # If we only have a single line `cube_str` we have no coords / attrs!
         # We need to handle this case specially.
         if len(lines) == 1:
-            content = ''
+            content = ""
         else:
             self._get_bits(lines)
             content = self._make_content()
 
-        return self._template.format(header=header,
-                                     id=self.cube_id,
-                                     shape=shape,
-                                     content=content)
+        return self._template.format(
+            header=header, id=self.cube_id, shape=shape, content=content
+        )
 
 
-class CubeListRepresentation(object):
+class CubeListRepresentation:
     _template = """
 <style>
     .accordion-{uid} {{
@@ -399,16 +392,17 @@ class CubeListRepresentation(object):
     def make_content(self):
         html = []
         for i, cube in enumerate(self.cubelist):
-            title = '{i}: {summary}'.format(i=i,
-                                            summary=cube.summary(shorten=True))
+            title = "{i}: {summary}".format(i=i, summary=cube.summary(shorten=True))
+            title = escape(title)
             content = cube._repr_html_()
-            html.append(self._accordian_panel.format(uid=self.cubelist_id,
-                                                     title=title,
-                                                     content=content))
+            html.append(
+                self._accordian_panel.format(
+                    uid=self.cubelist_id, title=title, content=content
+                )
+            )
         return html
 
     def repr_html(self):
         contents = self.make_content()
-        contents_str = '\n'.join(contents)
-        return self._template.format(uid=self.cubelist_id,
-                                     contents=contents_str)
+        contents_str = "\n".join(contents)
+        return self._template.format(uid=self.cubelist_id, contents=contents_str)

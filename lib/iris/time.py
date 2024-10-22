@@ -1,33 +1,17 @@
-# (C) British Crown Copyright 2013 - 2018, Met Office
+# Copyright Iris contributors
 #
-# This file is part of Iris.
-#
-# Iris is free software: you can redistribute it and/or modify it under
-# the terms of the GNU Lesser General Public License as published by the
-# Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# Iris is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU Lesser General Public License for more details.
-#
-# You should have received a copy of the GNU Lesser General Public License
-# along with Iris.  If not, see <http://www.gnu.org/licenses/>.
-"""
-Time handling.
+# This file is part of Iris and is released under the BSD license.
+# See LICENSE in the root of the repository for full licensing details.
 
-"""
-
-from __future__ import (absolute_import, division, print_function)
-from six.moves import (filter, input, map, range, zip)  # noqa
+"""Time handling."""
 
 import functools
 
 
 @functools.total_ordering
-class PartialDateTime(object):
-    """
+class PartialDateTime:
+    """Allow partial comparisons against datetime-like objects.
+
     A :class:`PartialDateTime` object specifies values for some subset of
     the calendar/time fields (year, month, hour, etc.) for comparing
     with :class:`datetime.datetime`-like instances.
@@ -46,31 +30,54 @@ class PartialDateTime(object):
 
     """
 
-    __slots__ = ('year', 'month', 'day', 'hour', 'minute', 'second',
-                 'microsecond')
+    __slots__ = (
+        "year",
+        "month",
+        "day",
+        "hour",
+        "minute",
+        "second",
+        "microsecond",
+    )
 
     #: A dummy value provided as a workaround to allow comparisons with
     #: :class:`datetime.datetime`.
-    #: See http://bugs.python.org/issue8005.
-    # NB. It doesn't even matter what this value is.
+    #: See https://bugs.python.org/issue8005.
+    #: NB. It doesn't even matter what this value is.
     timetuple = None
 
-    def __init__(self, year=None, month=None, day=None, hour=None,
-                 minute=None, second=None, microsecond=None):
-        """
-        Allows partial comparisons against datetime-like objects.
+    def __init__(
+        self,
+        year=None,
+        month=None,
+        day=None,
+        hour=None,
+        minute=None,
+        second=None,
+        microsecond=None,
+    ):
+        """Allow partial comparisons against datetime-like objects.
 
-        Args:
+        Parameters
+        ----------
+        year : int
+            The year number as an integer, or None.
+        month : int
+            The month number as an integer, or None.
+        day : int
+            The day number as an integer, or None.
+        hour : int
+            The hour number as an integer, or None.
+        minute : int
+            The minute number as an integer, or None.
+        second : int
+            The second number as an integer, or None.
+        microsecond : int
+            The microsecond number as an integer, or None.
 
-        * year (int):
-        * month (int):
-        * day (int):
-        * hour (int):
-        * minute (int):
-        * second (int):
-        * microsecond (int):
-
-        For example, to select any days of the year after the 3rd of April:
+        Examples
+        --------
+        To select any days of the year after the 3rd of April:
 
         >>> from iris.time import PartialDateTime
         >>> import datetime
@@ -85,32 +92,26 @@ class PartialDateTime(object):
         False
 
         """
-
-        #: The year number as an integer, or None.
         self.year = year
-        #: The month number as an integer, or None.
         self.month = month
-        #: The day number as an integer, or None.
         self.day = day
-        #: The hour number as an integer, or None.
         self.hour = hour
-        #: The minute number as an integer, or None.
         self.minute = minute
-        #: The second number as an integer, or None.
         self.second = second
-        #: The microsecond number as an integer, or None.
         self.microsecond = microsecond
 
     def __repr__(self):
-        attr_pieces = ['{}={}'.format(name, getattr(self, name))
-                       for name in self.__slots__
-                       if getattr(self, name) is not None]
-        result = '{}({})'.format(type(self).__name__, ', '.join(attr_pieces))
+        attr_pieces = [
+            "{}={}".format(name, getattr(self, name))
+            for name in self.__slots__
+            if getattr(self, name) is not None
+        ]
+        result = "{}({})".format(type(self).__name__, ", ".join(attr_pieces))
         return result
 
     def __gt__(self, other):
         if isinstance(other, type(self)):
-            raise TypeError('Cannot order PartialDateTime instances.')
+            raise TypeError("Cannot order PartialDateTime instances.")
         result = False
         try:
             # Everything except 'microsecond' is mandatory
@@ -121,7 +122,7 @@ class PartialDateTime(object):
                     result = attr > other_attr
                     break
             # 'microsecond' is optional
-            if result and hasattr(other, 'microsecond'):
+            if result and hasattr(other, "microsecond"):
                 attr = self.microsecond
                 other_attr = other.microsecond
                 if attr is not None and attr != other_attr:
@@ -147,13 +148,22 @@ class PartialDateTime(object):
                         result = False
                         break
                 # 'microsecond' is optional
-                if result and hasattr(other, 'microsecond'):
+                if result and hasattr(other, "microsecond"):
                     attr = self.microsecond
                     other_attr = other.microsecond
                     if attr is not None and attr != other_attr:
                         result = False
+
             except AttributeError:
-                result = NotImplemented
+                result = other.__eq__(self)
+                if result is NotImplemented:
+                    # Equality is undefined between these objects.  We don't
+                    # want Python to fall back to the default `object`
+                    # behaviour (which compares using object IDs), so we raise
+                    # an exception here instead.
+                    fmt = "unable to compare PartialDateTime with {}"
+                    raise TypeError(fmt.format(type(other)))
+
         return result
 
     def __ne__(self, other):
@@ -161,14 +171,3 @@ class PartialDateTime(object):
         if result is not NotImplemented:
             result = not result
         return result
-
-    def __cmp__(self, other):
-        # Since we've defined all the rich comparison operators (via
-        # functools.total_ordering), we can only reach this point if
-        # neither this class nor the other class had a rich comparison
-        # that could handle the type combination.
-        # We don't want Python to fall back to the default `object`
-        # behaviour (which compares using object IDs), so we raise an
-        # exception here instead.
-        fmt = 'unable to compare PartialDateTime with {}'
-        raise TypeError(fmt.format(type(other)))

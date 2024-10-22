@@ -1,27 +1,8 @@
-# (C) British Crown Copyright 2010 - 2017, Met Office
+# Copyright Iris contributors
 #
-# This file is part of Iris.
-#
-# Iris is free software: you can redistribute it and/or modify it under
-# the terms of the GNU Lesser General Public License as published by the
-# Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# Iris is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU Lesser General Public License for more details.
-#
-# You should have received a copy of the GNU Lesser General Public License
-# along with Iris.  If not, see <http://www.gnu.org/licenses/>.
-"""
-Generalised mechanisms for metadata translation and cube construction.
-
-"""
-
-from __future__ import (absolute_import, division, print_function)
-from six.moves import (filter, input, map, range, zip)  # noqa
-import six
+# This file is part of Iris and is released under the BSD license.
+# See LICENSE in the root of the repository for full licensing details.
+"""Generalised mechanisms for metadata translation and cube construction."""
 
 import collections
 import warnings
@@ -32,17 +13,17 @@ from iris.analysis import Linear
 import iris.cube
 import iris.exceptions
 import iris.fileformats.um_cf_map
+import iris.warnings
 
-Factory = collections.namedtuple('Factory', ['factory_class', 'args'])
-ReferenceTarget = collections.namedtuple('ReferenceTarget',
-                                         ('name', 'transform'))
+Factory = collections.namedtuple("Factory", ["factory_class", "args"])
+ReferenceTarget = collections.namedtuple("ReferenceTarget", ("name", "transform"))
 
 
-class ConcreteReferenceTarget(object):
+class ConcreteReferenceTarget:
     """Everything you need to make a real Cube for a named reference."""
 
     def __init__(self, name, transform=None):
-        #: The name used to connect references with referencees.
+        #: The name used to connect references with references.
         self.name = name
         #: An optional transformation to apply to the cubes.
         self.transform = transform
@@ -60,8 +41,10 @@ class ConcreteReferenceTarget(object):
                 # time-varying surface pressure in hybrid-presure.
                 src_cubes = src_cubes.merge(unique=False)
                 if len(src_cubes) > 1:
-                    warnings.warn('Multiple reference cubes for {}'
-                                  .format(self.name))
+                    warnings.warn(
+                        "Multiple reference cubes for {}".format(self.name),
+                        category=iris.warnings.IrisUserWarning,
+                    )
             src_cube = src_cubes[-1]
 
             if self.transform is None:
@@ -69,7 +52,7 @@ class ConcreteReferenceTarget(object):
             else:
                 final_cube = src_cube.copy()
                 attributes = self.transform(final_cube)
-                for name, value in six.iteritems(attributes):
+                for name, value in attributes.items():
                     setattr(final_cube, name, value)
                 self._final_cube = final_cube
 
@@ -77,7 +60,7 @@ class ConcreteReferenceTarget(object):
 
 
 class Reference(iris.util._OrderedHashable):
-    _names = ('name',)
+    _names = ("name",)
     """
     A named placeholder for inter-field references.
 
@@ -118,8 +101,9 @@ def scalar_cell_method(cube, method, coord_name):
 
 
 def has_aux_factory(cube, aux_factory_class):
-    """
-    Try to find an class:`~iris.aux_factory.AuxCoordFactory` instance of the
+    """Determine :class:`~iris.aux_factory.AuxCoordFactory` availability within cube.
+
+    Try to find an :class:`~iris.aux_factory.AuxCoordFactory` instance of the
     specified type on the cube.
 
     """
@@ -130,29 +114,36 @@ def has_aux_factory(cube, aux_factory_class):
 
 
 def aux_factory(cube, aux_factory_class):
-    """
-    Return the class:`~iris.aux_factory.AuxCoordFactory` instance of the
+    """Retrieve :class:`~iris.aux_factory.AuxCoordFactory` instance from cube.
+
+    Return the :class:`~iris.aux_factory.AuxCoordFactory` instance of the
     specified type from a cube.
 
     """
-    aux_factories = [aux_factory for aux_factory in cube.aux_factories if
-                     isinstance(aux_factory, aux_factory_class)]
+    aux_factories = [
+        aux_factory
+        for aux_factory in cube.aux_factories
+        if isinstance(aux_factory, aux_factory_class)
+    ]
     if not aux_factories:
-        raise ValueError('Cube does not have an aux factory of '
-                         'type {!r}.'.format(aux_factory_class))
+        raise ValueError(
+            "Cube does not have an aux factory of type {!r}.".format(aux_factory_class)
+        )
     elif len(aux_factories) > 1:
-        raise ValueError('Cube has more than one aux factory of '
-                         'type {!r}.'.format(aux_factory_class))
+        raise ValueError(
+            "Cube has more than one aux factory of type {!r}.".format(aux_factory_class)
+        )
     return aux_factories[0]
 
 
 class _ReferenceError(Exception):
     """Signals an invalid/missing reference field."""
+
     pass
 
 
 def _dereference_args(factory, reference_targets, regrid_cache, cube):
-    """Converts all the arguments for a factory into concrete coordinates."""
+    """Convert all the arguments for a factory into concrete coordinates."""
     args = []
     for arg in factory.args:
         if isinstance(arg, Reference):
@@ -162,22 +153,27 @@ def _dereference_args(factory, reference_targets, regrid_cache, cube):
                 # match the grid of this cube.
                 src = _ensure_aligned(regrid_cache, src, cube)
                 if src is not None:
-                    new_coord = iris.coords.AuxCoord(src.data,
-                                                     src.standard_name,
-                                                     src.long_name,
-                                                     src.var_name,
-                                                     src.units,
-                                                     attributes=src.attributes)
-                    dims = [cube.coord_dims(src_coord)[0]
-                                for src_coord in src.dim_coords]
+                    new_coord = iris.coords.AuxCoord(
+                        src.data,
+                        src.standard_name,
+                        src.long_name,
+                        src.var_name,
+                        src.units,
+                        attributes=src.attributes,
+                    )
+                    dims = [
+                        cube.coord_dims(src_coord)[0] for src_coord in src.dim_coords
+                    ]
                     cube.add_aux_coord(new_coord, dims)
                     args.append(new_coord)
                 else:
-                    raise _ReferenceError('Unable to regrid reference for'
-                                          ' {!r}'.format(arg.name))
+                    raise _ReferenceError(
+                        "Unable to regrid reference for {!r}".format(arg.name)
+                    )
             else:
-                raise _ReferenceError("The source data contains no "
-                                      "field(s) for {!r}.".format(arg.name))
+                raise _ReferenceError(
+                    "The source data contains no field(s) for {!r}.".format(arg.name)
+                )
         else:
             # If it wasn't a Reference, then arg is a dictionary
             # of keyword arguments for cube.coord(...).
@@ -204,7 +200,8 @@ def _regrid_to_target(src_cube, target_coords, target_cube):
 
 
 def _ensure_aligned(regrid_cache, src_cube, target_cube):
-    """
+    """Ensure dimension compatible cubes are spatially aligned.
+
     Returns a version of `src_cube` suitable for use as an AuxCoord
     on `target_cube`, or None if no version can be made.
 
@@ -246,8 +243,7 @@ def _ensure_aligned(regrid_cache, src_cube, target_cube):
                 result_cube = cubes[i]
             except ValueError:
                 # Not already cached, so do the hard work of interpolating.
-                result_cube = _regrid_to_target(src_cube, target_coords,
-                                                target_cube)
+                result_cube = _regrid_to_target(src_cube, target_coords, target_cube)
                 # Add it to the cache.
                 grids.append(target_coords)
                 cubes.append(result_cube)
@@ -255,37 +251,43 @@ def _ensure_aligned(regrid_cache, src_cube, target_cube):
     return result_cube
 
 
-_loader_attrs = ('field_generator', 'field_generator_kwargs',
-                 'converter')
-class Loader(collections.namedtuple('Loader', _loader_attrs)):
+class Loader(
+    collections.namedtuple(
+        "Loader",
+        ("field_generator", "field_generator_kwargs", "converter"),
+    )
+):
     def __new__(cls, field_generator, field_generator_kwargs, converter):
-        """
-        Create a definition of a field-based Cube loader.
+        """Create a definition of a field-based Cube loader.
 
-        Args:
-
-        * field_generator
+        Parameters
+        ----------
+        field_generator :
             A callable that accepts a filename as its first argument and
             returns an iterable of field objects.
-
-        * field_generator_kwargs
+        field_generator_kwargs :
             Additional arguments to be passed to the field_generator.
-
-        * converter
+        converter :
             A callable that converts a field object into a Cube.
 
         """
-        return tuple.__new__(cls, (field_generator, field_generator_kwargs,
-                                   converter))
+        return tuple.__new__(cls, (field_generator, field_generator_kwargs, converter))
 
 
-ConversionMetadata = collections.namedtuple('ConversionMetadata',
-                                            ('factories', 'references',
-                                             'standard_name', 'long_name',
-                                             'units', 'attributes',
-                                             'cell_methods',
-                                             'dim_coords_and_dims',
-                                             'aux_coords_and_dims'))
+ConversionMetadata = collections.namedtuple(
+    "ConversionMetadata",
+    (
+        "factories",
+        "references",
+        "standard_name",
+        "long_name",
+        "units",
+        "attributes",
+        "cell_methods",
+        "dim_coords_and_dims",
+        "aux_coords_and_dims",
+    ),
+)
 
 
 def _make_cube(field, converter):
@@ -293,11 +295,13 @@ def _make_cube(field, converter):
     metadata = converter(field)
 
     cube_data = field.core_data()
-    cube = iris.cube.Cube(cube_data,
-                          attributes=metadata.attributes,
-                          cell_methods=metadata.cell_methods,
-                          dim_coords_and_dims=metadata.dim_coords_and_dims,
-                          aux_coords_and_dims=metadata.aux_coords_and_dims)
+    cube = iris.cube.Cube(
+        cube_data,
+        attributes=metadata.attributes,
+        cell_methods=metadata.cell_methods,
+        dim_coords_and_dims=metadata.dim_coords_and_dims,
+        aux_coords_and_dims=metadata.aux_coords_and_dims,
+    )
 
     # Temporary code to deal with invalid standard names in the
     # translation table.
@@ -311,34 +315,40 @@ def _make_cube(field, converter):
         try:
             cube.units = metadata.units
         except ValueError:
-            msg = 'Ignoring PP invalid units {!r}'.format(metadata.units)
-            warnings.warn(msg)
-            cube.attributes['invalid_units'] = metadata.units
+            msg = "Ignoring PP invalid units {!r}".format(metadata.units)
+            warnings.warn(msg, category=iris.warnings.IrisIgnoringWarning)
+            cube.attributes["invalid_units"] = metadata.units
             cube.units = cf_units._UNKNOWN_UNIT_STRING
 
     return cube, metadata.factories, metadata.references
 
 
-def _resolve_factory_references(cube, factories, concrete_reference_targets,
-                                regrid_cache={}):
+def _resolve_factory_references(
+    cube, factories, concrete_reference_targets, regrid_cache={}
+):
     # Attach the factories for a cube, building them from references.
     # Note: the regrid_cache argument lets us share and reuse regridded data
     # across multiple result cubes.
     for factory in factories:
         try:
-            args = _dereference_args(factory, concrete_reference_targets,
-                                     regrid_cache, cube)
+            args = _dereference_args(
+                factory, concrete_reference_targets, regrid_cache, cube
+            )
         except _ReferenceError as e:
-            msg = 'Unable to create instance of {factory}. ' + str(e)
+            msg = "Unable to create instance of {factory}. " + str(e)
             factory_name = factory.factory_class.__name__
-            warnings.warn(msg.format(factory=factory_name))
+            warnings.warn(
+                msg.format(factory=factory_name),
+                category=iris.warnings.IrisUserWarning,
+            )
         else:
             aux_factory = factory.factory_class(*args)
             cube.add_aux_factory(aux_factory)
 
 
-def _load_pairs_from_fields_and_filenames(fields_and_filenames, converter,
-                                          user_callback_wrapper=None):
+def _load_pairs_from_fields_and_filenames(
+    fields_and_filenames, converter, user_callback_wrapper=None
+):
     # The underlying mechanism for the public 'load_pairs_from_fields' and
     # 'load_cubes'.
     # Slightly more complicated than 'load_pairs_from_fields', only because it
@@ -351,8 +361,7 @@ def _load_pairs_from_fields_and_filenames(fields_and_filenames, converter,
 
         # Post modify the new cube with a user-callback.
         # This is an ordinary Iris load callback, so it takes the filename.
-        cube = iris.io.run_callback(user_callback_wrapper,
-                                    cube, field, filename)
+        cube = iris.io.run_callback(user_callback_wrapper, cube, field, filename)
         # Callback mechanism may return None, which must not be yielded.
         if cube is None:
             continue
@@ -373,43 +382,43 @@ def _load_pairs_from_fields_and_filenames(fields_and_filenames, converter,
             yield (cube, field)
 
     regrid_cache = {}
-    for (cube, factories, field) in results_needing_reference:
+    for cube, factories, field in results_needing_reference:
         _resolve_factory_references(
-            cube, factories, concrete_reference_targets, regrid_cache)
+            cube, factories, concrete_reference_targets, regrid_cache
+        )
         yield (cube, field)
 
 
 def load_pairs_from_fields(fields, converter):
-    """
-    Convert an iterable of fields into an iterable of Cubes using the
-    provided convertor.
+    """Convert iterable of fields into iterable of Cubes using the provided converter.
 
-    Args:
-
-    * fields:
+    Parameters
+    ----------
+    fields :
         An iterable of fields.
-
-    * convertor:
-        An Iris convertor function, suitable for use with the supplied fields.
+    converter :
+        An Iris converter function, suitable for use with the supplied fields.
         See the description in :class:`iris.fileformats.rules.Loader`.
 
-    Returns:
-        An iterable of (:class:`iris.cube.Cube`, field) pairs.
+    Returns
+    -------
+    An iterable of (:class:`iris.cube.Cube`, field) pairs.
 
     """
     return _load_pairs_from_fields_and_filenames(
-        ((field, None) for field in fields),
-        converter)
+        ((field, None) for field in fields), converter
+    )
 
 
 def load_cubes(filenames, user_callback, loader, filter_function=None):
-    if isinstance(filenames, six.string_types):
+    if isinstance(filenames, str):
         filenames = [filenames]
 
     def _generate_all_fields_and_filenames():
         for filename in filenames:
             for field in loader.field_generator(
-                    filename, **loader.field_generator_kwargs):
+                filename, **loader.field_generator_kwargs
+            ):
                 # evaluate field against format specific desired attributes
                 # load if no format specific desired attributes are violated
                 if filter_function is None or filter_function(field):
@@ -424,7 +433,8 @@ def load_cubes(filenames, user_callback, loader, filter_function=None):
 
     all_fields_and_filenames = _generate_all_fields_and_filenames()
     for cube, field in _load_pairs_from_fields_and_filenames(
-            all_fields_and_filenames,
-            converter=loader.converter,
-            user_callback_wrapper=loadcubes_user_callback_wrapper):
+        all_fields_and_filenames,
+        converter=loader.converter,
+        user_callback_wrapper=loadcubes_user_callback_wrapper,
+    ):
         yield cube

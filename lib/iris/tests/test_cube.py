@@ -1,26 +1,11 @@
-# (C) British Crown Copyright 2010 - 2015, Met Office
+# Copyright Iris contributors
 #
-# This file is part of Iris.
-#
-# Iris is free software: you can redistribute it and/or modify it under
-# the terms of the GNU Lesser General Public License as published by the
-# Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# Iris is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU Lesser General Public License for more details.
-#
-# You should have received a copy of the GNU Lesser General Public License
-# along with Iris.  If not, see <http://www.gnu.org/licenses/>.
-
-from __future__ import (absolute_import, division, print_function)
-from six.moves import (filter, input, map, range, zip)  # noqa
+# This file is part of Iris and is released under the BSD license.
+# See LICENSE in the root of the repository for full licensing details.
 
 # import iris tests first so that some things can be initialised before
 # importing anything else
-import iris.tests as tests
+import iris.tests as tests  # isort:skip
 
 import numpy as np
 
@@ -80,9 +65,11 @@ class Test_Cube_add_dim_coord(tests.IrisTest):
         self.cube = iris.cube.Cube(np.arange(4).reshape(2, 2))
 
     def test_no_dim(self):
-        self.assertRaises(TypeError,
-                          self.cube.add_dim_coord,
-                          iris.coords.DimCoord(np.arange(2), "latitude"))
+        self.assertRaises(
+            TypeError,
+            self.cube.add_dim_coord,
+            iris.coords.DimCoord(np.arange(2), "latitude"),
+        )
 
     def test_adding_aux_coord(self):
         coord = iris.coords.AuxCoord(np.arange(2), "latitude")
@@ -92,8 +79,9 @@ class Test_Cube_add_dim_coord(tests.IrisTest):
 
 class TestEquality(tests.IrisTest):
     def test_not_implmemented(self):
-        class Terry(object):
+        class Terry:
             pass
+
         cube = iris.cube.Cube(0)
         self.assertIs(cube.__eq__(Terry()), NotImplemented)
         self.assertIs(cube.__ne__(Terry()), NotImplemented)

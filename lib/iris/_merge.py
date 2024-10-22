@@ -1,41 +1,31 @@
-# (C) British Crown Copyright 2010 - 2017, Met Office
+# Copyright Iris contributors
 #
-# This file is part of Iris.
-#
-# Iris is free software: you can redistribute it and/or modify it under
-# the terms of the GNU Lesser General Public License as published by the
-# Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# Iris is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU Lesser General Public License for more details.
-#
-# You should have received a copy of the GNU Lesser General Public License
-# along with Iris.  If not, see <http://www.gnu.org/licenses/>.
-"""
-Automatic collation of cubes into higher-dimensional cubes.
+# This file is part of Iris and is released under the BSD license.
+# See LICENSE in the root of the repository for full licensing details.
+"""Automatic collation of cubes into higher-dimensional cubes.
 
 Typically the cube merge process is handled by
-:method:`iris.cube.CubeList.merge`.
+:meth:`iris.cube.CubeList.merge`.
 
 """
 
-from __future__ import (absolute_import, division, print_function)
-from six.moves import (filter, input, map, range, zip)  # noqa
-import six
-
-from collections import namedtuple, OrderedDict
+from collections import OrderedDict, namedtuple
 from copy import deepcopy
 
 import numpy as np
-import numpy.ma as ma
 
-from iris._lazy_data import (as_lazy_data, as_concrete_data, is_lazy_data,
-                             multidim_lazy_stack)
-import iris.cube
+from iris._lazy_data import (
+    as_concrete_data,
+    as_lazy_data,
+    is_lazy_data,
+    multidim_lazy_stack,
+)
+from iris.common import CoordMetadata, CubeMetadata
+from iris.common._split_attribute_dicts import (
+    _convert_splitattrs_to_pairedkeys_dict as convert_splitattrs_to_pairedkeys_dict,
+)
 import iris.coords
+import iris.cube
 import iris.exceptions
 import iris.util
 
@@ -43,26 +33,21 @@ import iris.util
 #
 # Private namedtuple wrapper classes.
 #
-class _Template(namedtuple('Template',
-                           ['dims', 'points', 'bounds', 'kwargs'])):
-    """
-    Common framework from which to build a dimension or auxiliary coordinate.
+class _Template(namedtuple("Template", ["dims", "points", "bounds", "kwargs"])):
+    """Common framework from which to build a dimension or auxiliary coordinate.
 
-    Args:
-
-    * dims:
+    Parameters
+    ----------
+    dims :
         Tuple of the associated :class:`iris.cube.Cube` data dimension/s
         spanned by this coordinate template.
-
-    * points:
+    points :
         A :mod:`numpy` array representing the coordinate point data. No
         points data is represented by None.
-
-    * bounds:
+    bounds :
         A :mod:`numpy` array representing the coordinate bounds data. No
         bounds data is represented by None.
-
-    * kwargs:
+    kwargs :
         A dictionary of key/value pairs required to create a coordinate.
 
     """
@@ -70,22 +55,20 @@ class _Template(namedtuple('Template',
     __slots__ = ()
 
 
-class _CoordMetaData(namedtuple('CoordMetaData',
-                                ['points_dtype', 'bounds_dtype', 'kwargs'])):
-    """
-    Bespoke metadata required to build a dimension or auxiliary coordinate.
+class _CoordMetaData(
+    namedtuple("CoordMetaData", ["points_dtype", "bounds_dtype", "kwargs"])
+):
+    """Bespoke metadata required to build a dimension or auxiliary coordinate.
 
-    Args:
-
-    * points_dtype:
+    Parameters
+    ----------
+    points_dtype :
         The points data :class:`numpy.dtype` of an associated coordinate.
         None otherwise.
-
-    * bounds_dtype:
+    bounds_dtype :
         The bounds data :class:`numpy.dtype` of an associated coordinate.
         None otherwise.
-
-    * kwargs:
+    kwargs :
         A dictionary of key/value pairs required to create a coordinate.
 
     """
@@ -93,19 +76,18 @@ class _CoordMetaData(namedtuple('CoordMetaData',
     __slots__ = ()
 
 
-class _CoordAndDims(namedtuple('CoordAndDims',
-                               ['coord', 'dims'])):
-    """
+class _CoordAndDims(namedtuple("CoordAndDims", ["coord", "dims"])):
+    """Container for a coordinate and the associated data dimension/s.
+
     Container for a coordinate and the associated data dimension/s
     spanned over a :class:`iris.cube.Cube`.
 
-    Args:
-
-    * coord:
+    Parameters
+    ----------
+    coord :
         A :class:`iris.coords.DimCoord` or :class:`iris.coords.AuxCoord`
         coordinate instance.
-
-    * dims:
+    dims :
         A tuple of the data dimension/s spanned by the coordinate.
 
     """
@@ -113,27 +95,27 @@ class _CoordAndDims(namedtuple('CoordAndDims',
     __slots__ = ()
 
 
-class _ScalarCoordPayload(namedtuple('ScalarCoordPayload',
-                                     ['defns', 'values', 'metadata'])):
-    """
+class _ScalarCoordPayload(
+    namedtuple("ScalarCoordPayload", ["defns", "values", "metadata"])
+):
+    """Container for the payload.
+
     Container for all scalar coordinate data and metadata represented
     within a :class:`iris.cube.Cube`.
 
     All scalar coordinate related data is sorted into ascending order
     of the associated coordinate definition.
 
-    Args:
-
-    * defns:
-        A list of scalar coordinate definitions :class:`iris.coords.CoordDefn`
+    Parameters
+    ----------
+    defns :
+        A list of scalar coordinate metadata :class:`iris.common.CoordMetadata`
         belonging to a :class:`iris.cube.Cube`.
-
-    * values:
+    values :
         A list of scalar coordinate values belonging to a
         :class:`iris.cube.Cube`.  Each scalar coordinate value is
         typically an :class:`iris.coords.Cell`.
-
-    * metadata:
+    metadata :
         A list of :class:`_CoordMetaData` instances belonging to a
         :class:`iris.cube.Cube`.
 
@@ -142,22 +124,22 @@ class _ScalarCoordPayload(namedtuple('ScalarCoordPayload',
     __slots__ = ()
 
 
-class _VectorCoordPayload(namedtuple('VectorCoordPayload',
-                                     ['dim_coords_and_dims',
-                                      'aux_coords_and_dims'])):
-    """
+class _VectorCoordPayload(
+    namedtuple("VectorCoordPayload", ["dim_coords_and_dims", "aux_coords_and_dims"])
+):
+    """Container for the payload.
+
     Container for all vector coordinate data and metadata represented
     within a :class:`iris.cube.Cube`.
 
-    Args:
-
-    * dim_coords_and_dims:
+    Parameters
+    ----------
+    dim_coords_and_dims :
         A list of :class:`_CoordAndDim` instances containing non-scalar
         (i.e. multi-valued) :class:`iris.coords.DimCoord` instances and
         the associated data dimension spanned by them for a
         :class:`iris.cube.Cube`.
-
-    * aux_coords_and_dims:
+    aux_coords_and_dims :
         A list of :class:`_CoordAndDim` instances containing non-scalar
         (i.e. multi-valued) :class:`iris.coords.DimCoord` and/or
         :class:`iris.coords.AuxCoord` instances and the associated data
@@ -168,9 +150,9 @@ class _VectorCoordPayload(namedtuple('VectorCoordPayload',
     __slots__ = ()
 
 
-class _CoordPayload(namedtuple('CoordPayload',
-                               ['scalar', 'vector', 'factory_defns'])):
-    """
+class _CoordPayload(namedtuple("CoordPayload", ["scalar", "vector", "factory_defns"])):
+    """Container for the payload.
+
     Container for all the scalar and vector coordinate data and
     metadata, and auxiliary coordinate factories represented within a
     :class:`iris.cube.Cube`.
@@ -178,15 +160,13 @@ class _CoordPayload(namedtuple('CoordPayload',
     All scalar coordinate and factory related data is sorted into
     ascending order of the associated coordinate definition.
 
-    Args:
-
-    * scalar:
+    Parameters
+    ----------
+    scalar :
         A :class:`_ScalarCoordPayload` instance.
-
-    * vector:
+    vector :
         A :class:`_VectorCoordPayload` instance.
-
-    * factory_defns:
+    factory_defns :
         A list of :class:`_FactoryDefn` instances.
 
     """
@@ -195,11 +175,12 @@ class _CoordPayload(namedtuple('CoordPayload',
 
     def as_signature(self):
         """Construct and return a :class:`_CoordSignature` from the payload."""
-
-        return _CoordSignature(self.scalar.defns,
-                               self.vector.dim_coords_and_dims,
-                               self.vector.aux_coords_and_dims,
-                               self.factory_defns)
+        return _CoordSignature(
+            self.scalar.defns,
+            self.vector.dim_coords_and_dims,
+            self.vector.aux_coords_and_dims,
+            self.factory_defns,
+        )
 
     @staticmethod
     def _coords_msgs(msgs, coord_group, defns_a, defns_b):
@@ -215,31 +196,38 @@ class _CoordPayload(namedtuple('CoordPayload',
             diff_defns.extend(defns_b)
             if diff_defns:
                 names = sorted(set(defn.name() for defn in diff_defns))
-                msgs.append('Coordinates in {} differ: {}.'.format(
-                    coord_group, ', '.join(names)))
+                msgs.append(
+                    "Coordinates in {} differ: {}.".format(
+                        coord_group, ", ".join(names)
+                    )
+                )
             else:
-                msgs.append('Coordinates in {} differ by dtype or class'
-                            ' (i.e. DimCoord vs AuxCoord).'.format(
-                                coord_group))
+                msgs.append(
+                    "Coordinates in {} differ by dtype or class"
+                    " (i.e. DimCoord vs AuxCoord).".format(coord_group)
+                )
 
     def match_signature(self, signature, error_on_mismatch):
-        """
+        """Check if _CoordPayload matches the corresponding aspects of a _CoordSignature.
+
         Return whether this _CoordPayload matches the corresponding
         aspects of a _CoordSignature.
 
-        Args:
-
-        * signature (_CoordSignature):
+        Parameters
+        ----------
+        signature : _CoordSignature
             The _CoordSignature to compare against.
-
-        * error_on_mismatch (bool):
+        error_on_mismatch : bool
             If True, raise an Exception with detailed explanation.
 
-        Returns:
-           Boolean. True if and only if this _CoordPayload matches
-           the corresponding aspects `other`.
+        Returns
+        -------
+        bool
+            True if and only if this _CoordPayload matches
+            the corresponding aspects `other`.
 
         """
+
         def unzip(coords_and_dims):
             if coords_and_dims:
                 coords, dims = zip(*coords_and_dims)
@@ -250,27 +238,33 @@ class _CoordPayload(namedtuple('CoordPayload',
         def dims_msgs(msgs, coord_group, dimlists_a, dimlists_b):
             if dimlists_a != dimlists_b:
                 msgs.append(
-                    'Coordinate-to-dimension mapping differs for {}.'.format(
-                        coord_group))
+                    "Coordinate-to-dimension mapping differs for {}.".format(
+                        coord_group
+                    )
+                )
 
         msgs = []
-        self._coords_msgs(msgs, 'cube.aux_coords (scalar)', self.scalar.defns,
-                          signature.scalar_defns)
+        self._coords_msgs(
+            msgs,
+            "cube.aux_coords (scalar)",
+            self.scalar.defns,
+            signature.scalar_defns,
+        )
 
-        coord_group = 'cube.dim_coords'
+        coord_group = "cube.dim_coords"
         self_coords, self_dims = unzip(self.vector.dim_coords_and_dims)
         other_coords, other_dims = unzip(signature.vector_dim_coords_and_dims)
         self._coords_msgs(msgs, coord_group, self_coords, other_coords)
         dims_msgs(msgs, coord_group, self_dims, other_dims)
 
-        coord_group = 'cube.aux_coords (non-scalar)'
+        coord_group = "cube.aux_coords (non-scalar)"
         self_coords, self_dims = unzip(self.vector.aux_coords_and_dims)
         other_coords, other_dims = unzip(signature.vector_aux_coords_and_dims)
         self._coords_msgs(msgs, coord_group, self_coords, other_coords)
         dims_msgs(msgs, coord_group, self_dims, other_dims)
 
         if self.factory_defns != signature.factory_defns:
-            msgs.append('cube.aux_factories() differ')
+            msgs.append("cube.aux_factories() differ")
 
         match = not bool(msgs)
         if error_on_mismatch and not match:
@@ -278,34 +272,38 @@ class _CoordPayload(namedtuple('CoordPayload',
         return match
 
 
-class _CoordSignature(namedtuple('CoordSignature',
-                                 ['scalar_defns',
-                                  'vector_dim_coords_and_dims',
-                                  'vector_aux_coords_and_dims',
-                                  'factory_defns'])):
-    """
+class _CoordSignature(
+    namedtuple(
+        "CoordSignature",
+        [
+            "scalar_defns",
+            "vector_dim_coords_and_dims",
+            "vector_aux_coords_and_dims",
+            "factory_defns",
+        ],
+    )
+):
+    """Criterion for identifying a specific type of :class:`iris.cube.Cube`.
+
     Criterion for identifying a specific type of :class:`iris.cube.Cube`
-    based on its scalar and vector coorinate data and metadata, and
+    based on its scalar and vector coordinate data and metadata, and
     auxiliary coordinate factories.
 
-    Args:
-
-    * scalar_defns:
+    Parameters
+    ----------
+    scalar_defns :
         A list of scalar coordinate definitions sorted into ascending order.
-
-    * vector_dim_coords_and_dims:
+    vector_dim_coords_and_dims :
         A list of :class:`_CoordAndDim` instances containing non-scalar
         (i.e. multi-valued) :class:`iris.coords.DimCoord` instances and
         the associated data dimension spanned by them for a
         :class:`iris.cube.Cube`.
-
-    * vector_aux_coords_and_dims:
+    vector_aux_coords_and_dims :
         A list of :class:`_CoordAndDim` instances containing non-scalar
         (i.e. multi-valued) :class:`iris.coords.DimCoord` and/or
         :class:`iris.coords.AuxCoord` instances and the associated data
         dimension/s spanned by them for a :class:`iris.cube.Cube`.
-
-    * factory_defns:
+    factory_defns :
         A list of :class:`_FactoryDefn` instances.
 
     """
@@ -313,26 +311,32 @@ class _CoordSignature(namedtuple('CoordSignature',
     __slots__ = ()
 
 
-class _CubeSignature(namedtuple('CubeSignature',
-                                ['defn', 'data_shape', 'data_type',
-                                 'cell_measures_and_dims'])):
-    """
-    Criterion for identifying a specific type of :class:`iris.cube.Cube`
-    based on its metadata.
+class _CubeSignature(
+    namedtuple(
+        "CubeSignature",
+        [
+            "defn",
+            "data_shape",
+            "data_type",
+            "cell_measures_and_dims",
+            "ancillary_variables_and_dims",
+        ],
+    )
+):
+    """Criterion for identifying specific type of :class:`iris.cube.Cube` based on its metadata.
 
-    Args:
-
-    * defn:
+    Parameters
+    ----------
+    defn :
         A cube definition tuple.
-
-    * data_shape:
+    data_shape :
         The data payload shape of a :class:`iris.cube.Cube`.
-
-    * data_type:
+    data_type :
         The data payload :class:`numpy.dtype` of a :class:`iris.cube.Cube`.
-
-    * cell_measures_and_dims:
+    cell_measures_and_dims :
         A list of cell_measures and dims for the cube.
+    ancillary_variables_and_dims :
+        A list of ancillary variables and dims for the cube.
 
     """
 
@@ -342,69 +346,98 @@ class _CubeSignature(namedtuple('CubeSignature',
         msgs = []
         self_defn = self.defn
         if self_defn.standard_name != other_defn.standard_name:
-            msgs.append('cube.standard_name differs: {!r} != {!r}'.format(
-                self_defn.standard_name, other_defn.standard_name))
+            msgs.append(
+                "cube.standard_name differs: {!r} != {!r}".format(
+                    self_defn.standard_name, other_defn.standard_name
+                )
+            )
         if self_defn.long_name != other_defn.long_name:
-            msgs.append('cube.long_name differs: {!r} != {!r}'.format(
-                self_defn.long_name, other_defn.long_name))
+            msgs.append(
+                "cube.long_name differs: {!r} != {!r}".format(
+                    self_defn.long_name, other_defn.long_name
+                )
+            )
         if self_defn.var_name != other_defn.var_name:
-            msgs.append('cube.var_name differs: {!r} != {!r}'.format(
-                self_defn.var_name, other_defn.var_name))
+            msgs.append(
+                "cube.var_name differs: {!r} != {!r}".format(
+                    self_defn.var_name, other_defn.var_name
+                )
+            )
         if self_defn.units != other_defn.units:
-            msgs.append('cube.units differs: {!r} != {!r}'.format(
-                self_defn.units, other_defn.units))
+            msgs.append(
+                "cube.units differs: {!r} != {!r}".format(
+                    self_defn.units, other_defn.units
+                )
+            )
         if self_defn.attributes != other_defn.attributes:
-            diff_keys = (set(self_defn.attributes.keys()) ^
-                         set(other_defn.attributes.keys()))
+            attrs_1, attrs_2 = self_defn.attributes, other_defn.attributes
+            diff_keys = sorted(
+                set(attrs_1.globals) ^ set(attrs_2.globals)
+                | set(attrs_1.locals) ^ set(attrs_2.locals)
+            )
             if diff_keys:
-                msgs.append('cube.attributes keys differ: ' +
-                            ', '.join(repr(key) for key in diff_keys))
-            else:
-                diff_attrs = [repr(key) for key in self_defn.attributes
-                              if np.all(self_defn.attributes[key] !=
-                                        other_defn.attributes[key])]
-                diff_attrs = ', '.join(diff_attrs)
                 msgs.append(
-                    'cube.attributes values differ for keys: {}'.format(
-                        diff_attrs))
+                    "cube.attributes keys differ: "
+                    + ", ".join(repr(key) for key in diff_keys)
+                )
+            else:
+                attrs_1, attrs_2 = [
+                    convert_splitattrs_to_pairedkeys_dict(dic)
+                    for dic in (attrs_1, attrs_2)
+                ]
+                diff_attrs = [
+                    repr(key[1])
+                    for key in attrs_1
+                    if np.all(attrs_1[key] != attrs_2[key])
+                ]
+                diff_attrs = ", ".join(sorted(diff_attrs))
+                msgs.append(
+                    "cube.attributes values differ for keys: {}".format(diff_attrs)
+                )
         if self_defn.cell_methods != other_defn.cell_methods:
-            msgs.append('cube.cell_methods differ')
+            msgs.append("cube.cell_methods differ")
         return msgs
 
     def match(self, other, error_on_mismatch):
-        """
-        Return whether this _CubeSignature equals another.
+        """Return whether this _CubeSignature equals another.
 
         This is the first step to determine if two "cubes" (either a
         real Cube or a ProtoCube) can be merged, by considering:
-            - standard_name, long_name, var_name
-            - units
-            - attributes
-            - cell_methods
-            - shape, dtype
 
-        Args:
+        * standard_name, long_name, var_name
+        * units
+        * attributes
+        * cell_methods
+        * shape, dtype
 
-        * other (_CubeSignature):
+        Parameters
+        ----------
+        other : _CubeSignature
             The _CubeSignature to compare against.
-
-        * error_on_mismatch (bool):
+        error_on_mismatch : bool
             If True, raise a :class:`~iris.exceptions.MergeException`
             with a detailed explanation if the two do not match.
 
-        Returns:
-           Boolean. True if and only if this _CubeSignature matches `other`.
+        Returns
+        -------
+        bool
+            True if and only if this _CubeSignature matches `other`.
 
         """
         msgs = self._defn_msgs(other.defn)
         if self.data_shape != other.data_shape:
-            msg = 'cube.shape differs: {} != {}'
+            msg = "cube.shape differs: {} != {}"
             msgs.append(msg.format(self.data_shape, other.data_shape))
         if self.data_type != other.data_type:
-            msg = 'cube data dtype differs: {} != {}'
+            msg = "cube data dtype differs: {} != {}"
             msgs.append(msg.format(self.data_type, other.data_type))
-        if (self.cell_measures_and_dims != other.cell_measures_and_dims):
-            msgs.append('cube.cell_measures differ')
+        # Both cell_measures_and_dims and ancillary_variables_and_dims are
+        # ordered by the same method, it is therefore not possible for a
+        # mismatch to be caused by a difference in order.
+        if self.cell_measures_and_dims != other.cell_measures_and_dims:
+            msgs.append("cube.cell_measures differ")
+        if self.ancillary_variables_and_dims != other.ancillary_variables_and_dims:
+            msgs.append("cube.ancillary_variables differ")
 
         match = not bool(msgs)
         if error_on_mismatch and not match:
@@ -412,21 +445,20 @@ class _CubeSignature(namedtuple('CubeSignature',
         return match
 
 
-class _Skeleton(namedtuple('Skeleton',
-                           ['scalar_values', 'data'])):
-    """
+class _Skeleton(namedtuple("Skeleton", ["scalar_values", "data"])):
+    """Basis of a source-cube.
+
     Basis of a source-cube, containing the associated scalar coordinate values
     and data payload of a :class:`iris.cube.Cube`.
 
-    Args:
-
-    * scalar_values:
+    Parameters
+    ----------
+    scalar_values :
         A list of scalar coordinate values belonging to a
         :class:`iris.cube.Cube` sorted into ascending order of the
         associated coordinate definition. Each scalar coordinate value
         is typically an :class:`iris.coords.Cell`.
-
-    * data:
+    data :
         The data payload of a :class:`iris.cube.Cube`.
 
     """
@@ -434,17 +466,14 @@ class _Skeleton(namedtuple('Skeleton',
     __slots__ = ()
 
 
-class _FactoryDefn(namedtuple('_FactoryDefn',
-                              ['class_', 'dependency_defns'])):
-    """
-    The information required to identify and rebuild a single AuxCoordFactory.
+class _FactoryDefn(namedtuple("_FactoryDefn", ["class_", "dependency_defns"])):
+    """The information required to identify and rebuild a single AuxCoordFactory.
 
-    Args:
-
-    * class_:
+    Parameters
+    ----------
+    class_ :
         The class of the AuxCoordFactory.
-
-    * dependency_defns:
+    dependency_defns :
         A list of pairs, where each pair contains a dependency key and its
         corresponding coordinate definition. Sorted on dependency key.
 
@@ -453,19 +482,18 @@ class _FactoryDefn(namedtuple('_FactoryDefn',
     __slots__ = ()
 
 
-class _Relation(namedtuple('Relation',
-                           ['separable', 'inseparable'])):
-    """
+class _Relation(namedtuple("Relation", ["separable", "inseparable"])):
+    """Categorisation of the candidate dimensions.
+
     Categorisation of the candidate dimensions belonging to a
     :class:`ProtoCube` into separable 'independent' dimensions, and
     inseparable dependent dimensions.
 
-    Args:
-
-    * separable:
+    Parameters
+    ----------
+    separable :
         A set of independent candidate dimension names.
-
-    * inseperable:
+    inseparable :
         A set of dependent candidate dimension names.
 
     """
@@ -473,28 +501,31 @@ class _Relation(namedtuple('Relation',
     __slots__ = ()
 
 
-_COMBINATION_JOIN = '-'
+_COMBINATION_JOIN = "-"
 
 
 def _is_combination(name):
-    """
+    """Determine whether the candidate dimension is an 'invented' combination.
+
     Determine whether the candidate dimension is an 'invented' combination
     of candidate dimensions.
 
-    Args:
-
-    * name:
+    Parameters
+    ----------
+    name :
         The candidate dimension.
 
-    Returns:
-        Boolean.
+    Returns
+    -------
+    bool
 
     """
     return _COMBINATION_JOIN in str(name)
 
 
 def build_indexes(positions):
-    """
+    r"""Construct a mapping for each candidate dimension.
+
     Construct a mapping for each candidate dimension that maps for each
     of its scalar values the set of values for each of the other candidate
     dimensions.
@@ -527,84 +558,86 @@ def build_indexes(positions):
              200: 'a': set([1]) 'b': set([10])
              300: 'a': set([2]) 'b': set([20])
 
-    Args:
-
-    * positions:
+    Parameters
+    ----------
+    positions :
         A list containing a dictionary of candidate dimension key to
         scalar value pairs for each source-cube.
 
-    Returns:
-        The cross-reference dictionary for each candidate dimension.
+    Returns
+    -------
+    The cross-reference dictionary for each candidate dimension.
 
     """
     names = positions[0].keys()
     scalar_index_by_name = {name: {} for name in names}
 
     for position in positions:
-        for name, value in six.iteritems(position):
+        for name, value in position.items():
             name_index_by_scalar = scalar_index_by_name[name]
 
             if value in name_index_by_scalar:
                 value_index_by_name = name_index_by_scalar[value]
                 for other_name in names:
                     if other_name != name:
-                        value_index_by_name[other_name].add(
-                            position[other_name])
+                        value_index_by_name[other_name].add(position[other_name])
             else:
                 name_index_by_scalar[value] = {
                     other_name: set((position[other_name],))
-                    for other_name in names if other_name != name}
+                    for other_name in names
+                    if other_name != name
+                }
 
     return scalar_index_by_name
 
 
 def _separable_pair(name, index):
-    """
-    Determine whether the candidate dimension is separable.
+    """Determine whether the candidate dimension is separable.
 
     A candidate dimension X and Y are separable if each scalar
     value of X maps to the same set of scalar values of Y.
 
-    Args:
-
-    * name1:
+    Parameters
+    ----------
+    name1 :
         The first candidate dimension to be compared.
-
-    * name2:
+    name2 :
         The second candidate dimension to be compared.
-
-    * index:
+    index :
         The cross-reference dictionary for the first candidate
         dimension.
 
-    Returns:
-        Boolean.
+    Returns
+    -------
+    bool
 
     """
-    items = six.itervalues(index)
+    items = iter(index.values())
     reference = next(items)[name]
 
     return all([item[name] == reference for item in items])
 
 
 def _separable(name, indexes):
-    """
+    """Determine the candidate dimensions that are separable and inseparable.
+
     Determine the candidate dimensions that are separable and
     inseparable relative to the provided candidate dimension.
 
     A candidate dimension X and Y are separable if each scalar
     value of X maps to the same set of scalar values of Y.
 
-    Args:
-
-    * name:
+    Parameters
+    ----------
+    name :
         The candidate dimension that requires its separable and
         inseparable relationship to be determined.
-
-    * indexes:
+    indexes :
         The cross-reference dictionary for each candidate dimension.
 
-    Returns:
+    Returns
+    -------
+    tuple
         A tuple containing the set of separable and inseparable
         candidate dimensions.
 
@@ -623,7 +656,8 @@ def _separable(name, indexes):
 
 
 def derive_relation_matrix(indexes):
-    """
+    """Construct a mapping for each candidate dimension.
+
     Construct a mapping for each candidate dimension that specifies
     which of the other candidate dimensions are separable or inseparable.
 
@@ -648,13 +682,14 @@ def derive_relation_matrix(indexes):
         'c': Relation(separable=set([]), inseparable=set(['a', 'b']))
         'b': Relation(separable=set([]), inseparable=set(['a', 'c']))
 
-    Args:
-
-    * indexes:
+    Parameters
+    ----------
+    indexes :
         The cross-reference dictionary for each candidate dimension.
 
-    Returns:
-        The relation dictionary for each candidate dimension.
+    Returns
+    -------
+    The relation dictionary for each candidate dimension.
 
     """
     # TODO: This takes twice as long as it could do because it doesn't
@@ -665,19 +700,19 @@ def derive_relation_matrix(indexes):
 
 
 def derive_groups(relation_matrix):
-    """
-    Determine all related (chained) groups of inseparable candidate dimensions.
+    """Determine all related (chained) groups of inseparable candidate dimensions.
 
     If candidate dimension A is inseparable for B and C, and B is inseparable
     from D, and E is inseparable from F. Then the groups are ABCD and EF.
 
-    Args:
-
-    * relation_matrix:
+    Parameters
+    ----------
+    relation_matrix :
         The relation dictionary for each candidate dimension.
 
-    Returns:
-        A list of all related (chained) inseparable candidate dimensions.
+    Returns
+    -------
+    A list of all related (chained) inseparable candidate dimensions.
 
     """
     names = set(relation_matrix)
@@ -701,20 +736,18 @@ def derive_groups(relation_matrix):
 
 
 def _derive_separable_group(relation_matrix, group):
-    """
-    Determine which candidate dimensions in the group are separable.
+    """Determine which candidate dimensions in the group are separable.
 
-    Args:
-
-    * relation_matrix:
+    Parameters
+    ----------
+    relation_matrix :
         The relation dictionary for each candidate dimension.
-
-    * group:
+    group :
         A set of related (chained) inseparable candidate dimensions.
 
-    Returns:
-        The set of candidate dimensions within the group that are
-        separable.
+    Returns
+    -------
+    The set of candidate dimensions within the group that are separable.
 
     """
     result = set()
@@ -727,34 +760,31 @@ def _derive_separable_group(relation_matrix, group):
 
 
 def _is_dependent(dependent, independent, positions, function_mapping=None):
-    """
+    """Determine whether there exists a one-to-one functional relationship.
+
     Determine whether there exists a one-to-one functional relationship
     between the independent candidate dimension/s and the dependent
     candidate dimension.
 
-    Args:
-
-    * dependent:
+    Parameters
+    ----------
+    dependent :
         A candidate dimension that requires to be functionally
         dependent on all the independent candidate dimensions.
-
-    * independent:
+    independent :
         A list of candidate dimension/s that require to act as the independent
         variables in a functional relationship.
-
-    * positions:
+    positions :
         A list containing a dictionary of candidate dimension key to
         scalar value pairs for each source-cube.
-
-    Kwargs:
-
-    * function_mapping:
+    function_mapping : optional
         A dictionary that enumerates a valid functional relationship
         between the dependent candidate dimension and the independent
         candidate dimension/s.
 
-    Returns:
-        Boolean.
+    Returns
+    -------
+    bool
 
     """
     valid = True
@@ -777,7 +807,8 @@ def _is_dependent(dependent, independent, positions, function_mapping=None):
 
 
 def _derive_consistent_groups(relation_matrix, separable_group):
-    """
+    """Determine the largest combinations of candidate dimensions.
+
     Determine the largest combinations of candidate dimensions within the
     separable group that are self consistently separable from one another.
 
@@ -785,32 +816,33 @@ def _derive_consistent_groups(relation_matrix, separable_group):
     B and C. Then the candidate dimension group ABC is a separable consistent
     group if B is separable from A and C, and C is separable from A and B.
 
-    Args:
-
-    * relation_matrix:
+    Parameters
+    ----------
+    relation_matrix :
         The relation dictionary for each candidate dimension.
-
-    * separable_group:
+    separable_group :
         The set of candidate dimensions that are separable.
 
-    Returns:
-        A list of candidate dimension groups that are consistently separable.
+    Returns
+    -------
+    A list of candidate dimension groups that are consistently separable.
 
     """
     result = []
 
     for name in separable_group:
-        name_separable_group = relation_matrix[name].separable & \
-            separable_group
+        name_separable_group = relation_matrix[name].separable & separable_group
         candidate = list(name_separable_group) + [name]
         valid = True
 
         for _ in range(len(name_separable_group)):
             candidate_separable_group = set(candidate[1:])
 
-            if candidate_separable_group & \
-                    (relation_matrix[candidate[0]].separable &
-                     separable_group) != candidate_separable_group:
+            if (
+                candidate_separable_group
+                & (relation_matrix[candidate[0]].separable & separable_group)
+                != candidate_separable_group
+            ):
                 valid = False
                 break
 
@@ -822,9 +854,11 @@ def _derive_consistent_groups(relation_matrix, separable_group):
     return result
 
 
-def _build_separable_group(space, group, separable_consistent_groups,
-                           positions, function_matrix):
-    """
+def _build_separable_group(
+    space, group, separable_consistent_groups, positions, function_matrix
+):
+    """Update the space with the first separable consistent group.
+
     Update the space with the first separable consistent group that
     satisfies a valid functional relationship with all other candidate
     dimensions in the group.
@@ -836,28 +870,25 @@ def _build_separable_group(space, group, separable_consistent_groups,
     and D, and "C: None" means that this candidate dimension is
     independent.
 
-    Args:
-
-    * space:
+    Parameters
+    ----------
+    space :
         A dictionary defining for each candidate dimension its
         dependency on any other candidate dimensions within the space.
-
-    * group:
+    group :
         A set of related (chained) inseparable candidate dimensions.
-
-    * separable_consistent_groups:
+    separable_consistent_groups :
         A list of candidate dimension groups that are consistently separable.
-
-    * positions:
+    positions :
         A list containing a dictionary of candidate dimension key to
         scalar value pairs for each source-cube.
-
-    * function_matrix:
+    function_matrix :
         The function mapping dictionary for each candidate dimension that
         participates in a functional relationship.
 
-    Returns:
-        Boolean.
+    Returns
+    -------
+    bool
 
     """
     valid = False
@@ -868,8 +899,7 @@ def _build_separable_group(space, group, separable_consistent_groups,
 
         for name in dependent:
             function_mapping = {}
-            valid = _is_dependent(name, independent, positions,
-                                  function_mapping)
+            valid = _is_dependent(name, independent, positions, function_mapping)
 
             if not valid:
                 break
@@ -890,7 +920,8 @@ def _build_separable_group(space, group, separable_consistent_groups,
 
 
 def _build_inseparable_group(space, group, positions, function_matrix):
-    """
+    """Update the space with the first valid scalar functional relationship.
+
     Update the space with the first valid scalar functional relationship
     between a candidate dimension within the group and all other
     candidate dimensions.
@@ -906,25 +937,23 @@ def _build_inseparable_group(space, group, positions, function_matrix):
     and all others in the group, as the group is considered inseparable
     in this context.
 
-    Args:
-
-    * space:
+    Parameters
+    ----------
+    space :
         A dictionary defining for each candidate dimension its dependency on
         any other candidate dimensions within the space.
-
-    * group:
+    group :
         A set of related (chained) inseparable candidate dimensions.
-
-    * positions:
+    positions :
         A list containing a dictionary of candidate dimension key to
         scalar value pairs for each source-cube.
-
-    * function_matrix:
+    function_matrix :
         The function mapping dictionary for each candidate dimension that
         participates in a functional relationship.
 
-    Returns:
-        Boolean.
+    Returns
+    -------
+    bool
 
     """
     scalar = False
@@ -937,8 +966,7 @@ def _build_inseparable_group(space, group, positions, function_matrix):
 
         for name in dependent:
             function_mapping = {}
-            valid = _is_dependent(name, independent, positions,
-                                  function_mapping)
+            valid = _is_dependent(name, independent, positions, function_mapping)
 
             if not valid:
                 break
@@ -959,7 +987,8 @@ def _build_inseparable_group(space, group, positions, function_matrix):
 
 
 def _build_combination_group(space, group, positions, function_matrix):
-    """
+    """Update the space with the new combined or invented dimension.
+
     Update the space with the new combined or invented dimension
     that each member of this inseparable group depends on.
 
@@ -968,25 +997,23 @@ def _build_combination_group(space, group, positions, function_matrix):
     coordinate associated with it. Rather, it is simply an enumeration
     of the group members for each of the positions (source-cubes).
 
-    Args:
-
-    * space:
+    Parameters
+    ----------
+    space :
         A dictionary defining for each candidate dimension its dependency on
         any other candidate dimensions within the space.
-
-    * group:
+    group :
         A set of related (chained) inseparable candidate dimensions.
-
-    * positions:
+    positions :
         A list containing a dictionary of candidate dimension key to
         scalar value pairs for each source-cube.
-
-    * function_matrix:
+    function_matrix :
         The function mapping dictionary for each candidate dimension that
         participates in a functional relationship.
 
-    Returns:
-        None.
+    Returns
+    -------
+    None
 
     """
     combination = _COMBINATION_JOIN.join(sorted(map(str, group)))
@@ -1001,35 +1028,37 @@ def _build_combination_group(space, group, positions, function_matrix):
     for position in positions:
         # Note, the cell double-tuple! This ensures that the cell value for
         # each member of the group is kept bound together as one key.
-        cell = (tuple([position[int(member) if member.isdigit() else member]
-                       for member in members]),)
+        cell = (
+            tuple(
+                [
+                    position[int(member) if member.isdigit() else member]
+                    for member in members
+                ]
+            ),
+        )
         for name in group:
             function_matrix[name][cell] = position[name]
 
 
 def derive_space(groups, relation_matrix, positions, function_matrix=None):
-    """
-    Determine the relationship between all the candidate dimensions.
+    """Determine the relationship between all the candidate dimensions.
 
-    Args:
-      * groups:
-          A list of all related (chained) inseparable candidate dimensions.
-
-      * relation_matrix:
-          The relation dictionary for each candidate dimension.
-
-      * positions:
-          A list containing a dictionary of candidate dimension key to
-          scalar value pairs for each source-cube.
-
-    Kwargs:
-      * function_matrix:
+    Parameters
+    ----------
+    groups :
+        A list of all related (chained) inseparable candidate dimensions.
+    relation_matrix :
+        The relation dictionary for each candidate dimension.
+    positions :
+        A list containing a dictionary of candidate dimension key to
+        scalar value pairs for each source-cube.
+    function_matrix : optional
           The function mapping dictionary for each candidate dimension that
           participates in a functional relationship.
 
-    Returns:
-        A space dictionary describing the relationship between each
-        candidate dimension.
+    Returns
+    -------
+    A space dictionary describing the relationship between each candidate dimension.
 
     """
     space = {}
@@ -1045,47 +1074,46 @@ def derive_space(groups, relation_matrix, positions, function_matrix=None):
         elif separable_group:
             # Determine the largest combination of the candidate dimensions
             # in the separable group that are consistently separable.
-            consistent_groups = _derive_consistent_groups(relation_matrix,
-                                                          separable_group)
-            if not _build_separable_group(space, group, consistent_groups,
-                                          positions, function_matrix):
+            consistent_groups = _derive_consistent_groups(
+                relation_matrix, separable_group
+            )
+            if not _build_separable_group(
+                space, group, consistent_groups, positions, function_matrix
+            ):
                 # There is no relationship between any of the candidate
                 # dimensions in the separable group, so merge them together
                 # into a new combined dimension of the space.
-                _build_combination_group(space, group,
-                                         positions, function_matrix)
+                _build_combination_group(space, group, positions, function_matrix)
         else:
             # Determine whether there is a scalar relationship between one of
             # the candidate dimensions and each of the other candidate
             # dimensions in this inseparable group.
-            if not _build_inseparable_group(space, group,
-                                            positions, function_matrix):
+            if not _build_inseparable_group(space, group, positions, function_matrix):
                 # There is no relationship between any of the candidate
                 # dimensions in this inseparable group, so merge them together
                 # into a new combined dimension of the space.
-                _build_combination_group(space, group,
-                                         positions, function_matrix)
+                _build_combination_group(space, group, positions, function_matrix)
 
     return space
 
 
-class ProtoCube(object):
-    """
-    Framework for merging source-cubes into one or more higher
-    dimensional cubes.
-
-    """
+class ProtoCube:
+    """Framework for merging source-cubes into one or more higher dimensional cubes."""
 
     def __init__(self, cube):
-        """
-        Create a new ProtoCube from the given cube and record the cube
-        as a source-cube.
+        """Create a new ProtoCube from the given cube.
+
+        Create a new ProtoCube from the given cube and record the cube as a
+        source-cube.
 
         """
-
         # Default hint ordering for candidate dimension coordinates.
-        self._hints = ['time', 'forecast_reference_time', 'forecast_period',
-                       'model_level_number']
+        self._hints = [
+            "time",
+            "forecast_reference_time",
+            "forecast_period",
+            "model_level_number",
+        ]
 
         # The proto-cube source.
         self._source = cube
@@ -1130,48 +1158,55 @@ class ProtoCube(object):
         self._vector_dim_coords_dims = []
         self._vector_aux_coords_dims = []
 
-        # cell measures are not merge candidates
+        # cell measures and ancillary variables are not merge candidates
         # they are checked and preserved through merge
         self._cell_measures_and_dims = cube._cell_measures_and_dims
+        self._ancillary_variables_and_dims = cube._ancillary_variables_and_dims
 
     def _report_duplicate(self, nd_indexes, group_by_nd_index):
         # Find the first offending source-cube with duplicate metadata.
-        index = [group_by_nd_index[nd_index][1]
-                 for nd_index in nd_indexes
-                 if len(group_by_nd_index[nd_index]) > 1][0]
+        index = [
+            group_by_nd_index[nd_index][1]
+            for nd_index in nd_indexes
+            if len(group_by_nd_index[nd_index]) > 1
+        ][0]
         name = self._cube_signature.defn.name()
         scalars = []
-        for defn, value in zip(self._coord_signature.scalar_defns,
-                               self._skeletons[index].scalar_values):
-            scalars.append('%s=%r' % (defn.name(), value))
-        msg = 'Duplicate %r cube, with scalar coordinates %s'
-        msg = msg % (name, ', '.join(scalars))
+        for defn, value in zip(
+            self._coord_signature.scalar_defns,
+            self._skeletons[index].scalar_values,
+        ):
+            scalars.append("%s=%r" % (defn.name(), value))
+        msg = "Duplicate %r cube, with scalar coordinates %s"
+        msg = msg % (name, ", ".join(scalars))
         raise iris.exceptions.DuplicateDataError(msg)
 
     def merge(self, unique=True):
-        """
-        Returns the list of cubes resulting from merging the registered
-        source-cubes.
+        """Return the list of cubes resulting from merging the registered source-cubes.
 
-        Kwargs:
-
-        * unique:
+        Parameters
+        ----------
+        unique : bool, default=True
             If True, raises `iris.exceptions.DuplicateDataError` if
             duplicate cubes are detected.
 
-        Returns:
-            A :class:`iris.cube.CubeList` of merged cubes.
+        Returns
+        -------
+        A :class:`iris.cube.CubeList` of merged cubes.
 
         """
-        positions = [{i: v for i, v in enumerate(skeleton.scalar_values)}
-                     for skeleton in self._skeletons]
+        positions = [
+            {i: v for i, v in enumerate(skeleton.scalar_values)}
+            for skeleton in self._skeletons
+        ]
         indexes = build_indexes(positions)
         relation_matrix = derive_relation_matrix(indexes)
         groups = derive_groups(relation_matrix)
 
         function_matrix = {}
-        space = derive_space(groups, relation_matrix, positions,
-                             function_matrix=function_matrix)
+        space = derive_space(
+            groups, relation_matrix, positions, function_matrix=function_matrix
+        )
         self._define_space(space, positions, indexes, function_matrix)
         self._build_coordinates()
 
@@ -1195,20 +1230,12 @@ class ProtoCube(object):
 
         # Generate group-depth merged cubes from the source-cubes.
         for level in range(group_depth):
-            # Track the largest dtype of the data to be merged.
-            # Unfortunately, da.stack() is not symmetric with regards
-            # to dtypes. So stacking float + int yields a float, but
-            # stacking an int + float yields an int! We need to ensure
-            # that the largest dtype prevails i.e. float, in order to
-            # support the masked case for dask.
-            # Reference https://github.com/dask/dask/issues/2273.
-            dtype = None
             # Stack up all the data from all of the relevant source
             # cubes in a single dask "stacked" array.
             # If it turns out that all the source cubes already had
             # their data loaded then at the end we convert the stack back
             # into a plain numpy array.
-            stack = np.empty(self._stack_shape, 'object')
+            stack = np.empty(self._stack_shape, "object")
             all_have_data = True
             for nd_index in nd_indexes:
                 # Get the data of the current existing or last known
@@ -1223,21 +1250,11 @@ class ProtoCube(object):
                 else:
                     data = as_lazy_data(data)
                 stack[nd_index] = data
-                # Determine the largest dtype.
-                if dtype is None:
-                    dtype = data.dtype
-                else:
-                    dtype = np.promote_types(data.dtype, dtype)
-
-            # Coerce to the largest dtype.
-            for nd_index in nd_indexes:
-                stack[nd_index] = stack[nd_index].astype(dtype)
 
             merged_data = multidim_lazy_stack(stack)
             if all_have_data:
                 # All inputs were concrete, so turn the result back into a
                 # normal array.
-                dtype = self._cube_signature.data_type
                 merged_data = as_concrete_data(merged_data)
             merged_cube = self._get_cube(merged_data)
             merged_cubes.append(merged_cube)
@@ -1245,7 +1262,8 @@ class ProtoCube(object):
         return merged_cubes
 
     def register(self, cube, error_on_mismatch=False):
-        """
+        """Add a compatible :class:`iris.cube.Cube` as a source for merging.
+
         Add a compatible :class:`iris.cube.Cube` as a source-cube for
         merging under this :class:`ProtoCube`.
 
@@ -1253,20 +1271,19 @@ class ProtoCube(object):
         cube and the signature of its scalar coordinates and vector
         coordinates being identical to that of the ProtoCube.
 
-        Args:
-
-        * cube:
+        Parameters
+        ----------
+        cube :
             Candidate :class:`iris.cube.Cube` to be associated with
             this :class:`ProtoCube`.
-
-        Kwargs:
-
-        * error_on_mismatch:
+        error_on_mismatch : bool, default=False
             If True, raise an informative
             :class:`~iris.exceptions.MergeError` if registration fails.
 
-        Returns:
-            True iff the :class:`iris.cube.Cube` is compatible with
+        Returns
+        -------
+        bool
+            True if the :class:`iris.cube.Cube` is compatible with
             this :class:`ProtoCube`.
 
         """
@@ -1275,16 +1292,16 @@ class ProtoCube(object):
         match = cube_signature.match(other, error_on_mismatch)
         if match:
             coord_payload = self._extract_coord_payload(cube)
-            match = coord_payload.match_signature(self._coord_signature,
-                                                  error_on_mismatch)
+            match = coord_payload.match_signature(
+                self._coord_signature, error_on_mismatch
+            )
         if match:
             # Register the cube as a source-cube for this ProtoCube.
             self._add_cube(cube, coord_payload)
         return match
 
     def _guess_axis(self, name):
-        """
-        Returns a "best guess" axis name of the candidate dimension.
+        """Return a "best guess" axis name of the candidate dimension.
 
         Heuristic categoration of the candidate dimension
         (i.e. scalar_defn index) into either label 'T', 'Z', 'Y', 'X'
@@ -1293,13 +1310,15 @@ class ProtoCube(object):
         Based on the associated scalar coordinate definition rather than the
         scalar coordinate itself.
 
-        Args:
-
-        * name:
+        Parameters
+        ----------
+        name :
             The candidate dimension.
 
-        Returns:
-            'T', 'Z', 'Y', 'X', or None.
+        Returns
+        -------
+        str or None
+            {'T', 'Z', 'Y', 'X'} or None.
 
         """
         axis = None
@@ -1311,36 +1330,36 @@ class ProtoCube(object):
         return axis
 
     def _define_space(self, space, positions, indexes, function_matrix):
-        """
+        """Define space.
+
         Given the derived :class:`ProtoCube` space, define this space in
         terms of its dimensionality, shape, coordinates and associated
         coordinate to space dimension mappings.
 
-        Args:
-
-        * space:
+        Parameters
+        ----------
+        space :
             A dictionary defining for each candidate dimension its
             dependency on any other candidate dimensions within the space.
-
-        * positions:
+        positions :
             A list containing a dictionary of candidate dimension key to
             scalar value pairs for each source-cube.
-
-        * indexes:
+        indexes :
             A cross-reference dictionary for each candidate dimension.
-
-        * function_matrix:
+        function_matrix :
             The function mapping dictionary for each candidate dimension that
             participates in a functional relationship.
 
         """
-        # Heuristic reordering of coordinate defintion indexes into
+
+        # Heuristic reordering of coordinate definition indexes into
         # preferred dimension order.
         def axis_and_name(name):
-            axis_dict = {'T': 1, 'Z': 2, 'Y': 3, 'X': 4}
+            axis_dict = {"T": 1, "Z": 2, "Y": 3, "X": 4}
             axis_index = axis_dict.get(self._guess_axis(name), 0)
             # The middle element ensures sorting is the same as Python 2.
-            return (axis_index, not isinstance(name, six.integer_types), name)
+            return (axis_index, not isinstance(name, int), name)
+
         names = sorted(space, key=axis_and_name)
         dim_by_name = {}
 
@@ -1361,55 +1380,71 @@ class ProtoCube(object):
                     # are used to retain the ordering of source cubes but to
                     # remove any duplicate tuples.
                     cells = OrderedDict(
-                        (tuple(position[int(member) if member.isdigit() else
-                                        member] for member in members), None)
-                        for position in positions).keys()
+                        (
+                            tuple(
+                                position[int(member) if member.isdigit() else member]
+                                for member in members
+                            ),
+                            None,
+                        )
+                        for position in positions
+                    ).keys()
                     dim_by_name[name] = len(self._shape)
                     self._nd_names.append(name)
                     self._shape.append(len(cells))
                     self._stack_shape.append(len(cells))
-                    self._cache_by_name[name] = {cell: index for index, cell
-                                                 in enumerate(cells)}
+                    self._cache_by_name[name] = {
+                        cell: index for index, cell in enumerate(cells)
+                    }
                 else:
                     # TODO: Consider appropriate sort order (ascending,
-                    # decending) i.e. use CF positive attribute.
+                    # descending) i.e. use CF positive attribute.
                     cells = sorted(indexes[name])
-                    points = np.array([cell.point for cell in cells],
-                                      dtype=metadata[name].points_dtype)
+                    points = np.array(
+                        [cell.point for cell in cells],
+                        dtype=metadata[name].points_dtype,
+                    )
                     if cells[0].bound is not None:
-                        bounds = np.array([cell.bound for cell in cells],
-                                          dtype=metadata[name].bounds_dtype)
+                        bounds = np.array(
+                            [cell.bound for cell in cells],
+                            dtype=metadata[name].bounds_dtype,
+                        )
                     else:
                         bounds = None
-                    kwargs = dict(zip(iris.coords.CoordDefn._fields,
-                                      defns[name]))
+                    kwargs = dict(zip(CoordMetadata._fields, defns[name]))
                     kwargs.update(metadata[name].kwargs)
 
                     def name_in_independents():
-                        return any(name in independents
-                                   for independents in six.itervalues(space)
-                                   if independents is not None)
+                        return any(
+                            name in independents
+                            for independents in space.values()
+                            if independents is not None
+                        )
+
                     if len(cells) == 1 and not name_in_independents():
                         # A scalar coordinate not participating in a
                         # function dependency.
                         self._aux_templates.append(
-                            _Template((), points, bounds, kwargs))
+                            _Template((), points, bounds, kwargs)
+                        )
                     else:
                         # Dimension coordinate (or aux if the data is
                         # string like).
                         dim_by_name[name] = dim = len(self._shape)
                         self._nd_names.append(name)
-                        if metadata[name].points_dtype.kind in 'SU':
+                        if metadata[name].points_dtype.kind in "SU":
                             self._aux_templates.append(
-                                _Template(dim, points, bounds, kwargs))
+                                _Template(dim, points, bounds, kwargs)
+                            )
                         else:
                             self._dim_templates.append(
-                                _Template(dim, points, bounds, kwargs))
+                                _Template(dim, points, bounds, kwargs)
+                            )
                         self._shape.append(len(cells))
                         self._stack_shape.append(len(cells))
-                        self._cache_by_name[name] = {cell: index
-                                                     for index, cell
-                                                     in enumerate(cells)}
+                        self._cache_by_name[name] = {
+                            cell: index for index, cell in enumerate(cells)
+                        }
 
         # Second pass - Build the auxiliary coordinate templates for the space.
         for name in names:
@@ -1418,8 +1453,9 @@ class ProtoCube(object):
             # Determine if there is a function dependency.
             if name_independents is not None:
                 # Calculate the auxiliary coordinate shape.
-                dims = tuple([dim_by_name[independent]
-                             for independent in name_independents])
+                dims = tuple(
+                    [dim_by_name[independent] for independent in name_independents]
+                )
                 aux_shape = [self._shape[dim] for dim in dims]
                 # Create empty points and bounds in preparation to be filled.
                 points = np.empty(aux_shape, dtype=metadata[name].points_dtype)
@@ -1431,15 +1467,14 @@ class ProtoCube(object):
 
                 # Populate the points and bounds based on the appropriate
                 # function mapping.
-                temp = six.iteritems(function_matrix[name])
+                temp = function_matrix[name].items()
                 for function_independents, name_value in temp:
                     # Build the index (and cache it) for the auxiliary
                     # coordinate based on the associated independent
                     # dimension coordinate/s.
                     index = []
 
-                    name_function_pairs = zip(name_independents,
-                                              function_independents)
+                    name_function_pairs = zip(name_independents, function_independents)
                     for independent, independent_value in name_function_pairs:
                         cache = self._cache_by_name[independent]
                         index.append(cache[independent_value])
@@ -1451,43 +1486,54 @@ class ProtoCube(object):
                     if bounds is not None:
                         bounds[index] = name_value.bound
 
-                kwargs = dict(zip(iris.coords.CoordDefn._fields, defns[name]))
-                self._aux_templates.append(_Template(dims, points, bounds,
-                                                     kwargs))
+                kwargs = dict(zip(CoordMetadata._fields, defns[name]))
+                self._aux_templates.append(_Template(dims, points, bounds, kwargs))
 
         # Calculate the dimension mapping for each vector within the space.
         offset = len(self._shape)
-        self._vector_dim_coords_dims = \
-            [tuple([dim + offset for dim in item.dims])
-             for item in vector_dim_coords_and_dims]
-        self._vector_aux_coords_dims = \
-            [tuple([dim + offset for dim in item.dims])
-             for item in vector_aux_coords_and_dims]
+        self._vector_dim_coords_dims = [
+            tuple([dim + offset for dim in item.dims])
+            for item in vector_dim_coords_and_dims
+        ]
+        self._vector_aux_coords_dims = [
+            tuple([dim + offset for dim in item.dims])
+            for item in vector_aux_coords_and_dims
+        ]
 
         # Now factor in the vector payload shape. Note that, for
         # deferred loading, this does NOT change the shape.
         self._shape.extend(signature.data_shape)
 
     def _get_cube(self, data):
-        """
+        """Generate fully constructed cube.
+
         Return a fully constructed cube for the given data, containing
         all its coordinates and metadata.
 
         """
         signature = self._cube_signature
-        dim_coords_and_dims = [(deepcopy(coord), dim)
-                               for coord, dim in self._dim_coords_and_dims]
-        aux_coords_and_dims = [(deepcopy(coord), dims)
-                               for coord, dims in self._aux_coords_and_dims]
-        kwargs = dict(zip(iris.cube.CubeMetadata._fields, signature.defn))
+        dim_coords_and_dims = [
+            (deepcopy(coord), dim) for coord, dim in self._dim_coords_and_dims
+        ]
+        aux_coords_and_dims = [
+            (deepcopy(coord), dims) for coord, dims in self._aux_coords_and_dims
+        ]
+        kwargs = dict(zip(CubeMetadata._fields, signature.defn))
 
-        cms_and_dims = [(deepcopy(cm), dims)
-                        for cm, dims in self._cell_measures_and_dims]
-        cube = iris.cube.Cube(data,
-                              dim_coords_and_dims=dim_coords_and_dims,
-                              aux_coords_and_dims=aux_coords_and_dims,
-                              cell_measures_and_dims=cms_and_dims,
-                              **kwargs)
+        cms_and_dims = [
+            (deepcopy(cm), dims) for cm, dims in self._cell_measures_and_dims
+        ]
+        avs_and_dims = [
+            (deepcopy(av), dims) for av, dims in self._ancillary_variables_and_dims
+        ]
+        cube = iris.cube.Cube(
+            data,
+            dim_coords_and_dims=dim_coords_and_dims,
+            aux_coords_and_dims=aux_coords_and_dims,
+            cell_measures_and_dims=cms_and_dims,
+            ancillary_variables_and_dims=avs_and_dims,
+            **kwargs,
+        )
 
         # Add on any aux coord factories.
         for factory_defn in self._coord_signature.factory_defns:
@@ -1501,12 +1547,7 @@ class ProtoCube(object):
         return cube
 
     def _nd_index(self, position):
-        """
-        Returns the n-dimensional index of this source-cube (position),
-        within the merged cube.
-
-        """
-
+        """Return the n-dimensional index of thr source-cube, within the merged cube."""
         index = []
 
         # Determine the index of the source-cube cell for each dimension.
@@ -1515,7 +1556,8 @@ class ProtoCube(object):
                 members = name.split(_COMBINATION_JOIN)
                 cell = tuple(
                     position[int(member) if member.isdigit() else member]
-                    for member in members)
+                    for member in members
+                )
                 index.append(self._cache_by_name[name][cell])
             else:
                 index.append(self._cache_by_name[name][position[name]])
@@ -1523,7 +1565,8 @@ class ProtoCube(object):
         return tuple(index)
 
     def _build_coordinates(self):
-        """
+        """Build the dimension and auxiliary coordinates.
+
         Build the dimension and auxiliary coordinates for the final
         merged cube given that the final dimensionality of the target
         merged cube is known and the associated dimension/s that each
@@ -1546,17 +1589,18 @@ class ProtoCube(object):
             # and if it fails make the coordinate into an auxiliary coordinate.
             # This will ultimately make an anonymous dimension.
             try:
-                coord = iris.coords.DimCoord(template.points,
-                                             bounds=template.bounds,
-                                             **template.kwargs)
+                coord = iris.coords.DimCoord(
+                    template.points, bounds=template.bounds, **template.kwargs
+                )
                 dim_coords_and_dims.append(_CoordAndDims(coord, template.dims))
             except ValueError:
                 self._aux_templates.append(template)
 
         # There is the potential that there are still anonymous dimensions.
         # Get a list of the dimensions which are not anonymous at this stage.
-        covered_dims = [dim_coord_and_dim.dims
-                        for dim_coord_and_dim in dim_coords_and_dims]
+        covered_dims = [
+            dim_coord_and_dim.dims for dim_coord_and_dim in dim_coords_and_dims
+        ]
 
         # Build the auxiliary coordinates.
         for template in self._aux_templates:
@@ -1564,55 +1608,59 @@ class ProtoCube(object):
             # fails e.g it's non-monontic or multi-dimensional or non-numeric,
             # then build an AuxCoord.
             try:
-                coord = iris.coords.DimCoord(template.points,
-                                             bounds=template.bounds,
-                                             **template.kwargs)
-                if len(template.dims) == 1 and \
-                        template.dims[0] not in covered_dims:
-                    dim_coords_and_dims.append(
-                        _CoordAndDims(coord, template.dims))
+                coord = iris.coords.DimCoord(
+                    template.points, bounds=template.bounds, **template.kwargs
+                )
+                if len(template.dims) == 1 and template.dims[0] not in covered_dims:
+                    dim_coords_and_dims.append(_CoordAndDims(coord, template.dims))
                     covered_dims.append(template.dims[0])
                 else:
-                    aux_coords_and_dims.append(
-                        _CoordAndDims(coord, template.dims))
+                    aux_coords_and_dims.append(_CoordAndDims(coord, template.dims))
             except ValueError:
                 # kwarg not applicable to AuxCoord.
-                template.kwargs.pop('circular', None)
-                coord = iris.coords.AuxCoord(template.points,
-                                             bounds=template.bounds,
-                                             **template.kwargs)
+                template.kwargs.pop("circular", None)
+                coord = iris.coords.AuxCoord(
+                    template.points, bounds=template.bounds, **template.kwargs
+                )
                 aux_coords_and_dims.append(_CoordAndDims(coord, template.dims))
 
         # Mix in the vector coordinates.
-        for item, dims in zip(self._coord_signature.vector_dim_coords_and_dims,
-                              self._vector_dim_coords_dims):
+        for item, dims in zip(
+            self._coord_signature.vector_dim_coords_and_dims,
+            self._vector_dim_coords_dims,
+        ):
             dim_coords_and_dims.append(_CoordAndDims(item.coord, dims))
 
-        for item, dims in zip(self._coord_signature.vector_aux_coords_and_dims,
-                              self._vector_aux_coords_dims):
+        for item, dims in zip(
+            self._coord_signature.vector_aux_coords_and_dims,
+            self._vector_aux_coords_dims,
+        ):
             aux_coords_and_dims.append(_CoordAndDims(item.coord, dims))
 
     def _build_signature(self, cube):
-        """
-        Generate the signature that defines this cube.
+        """Generate the signature that defines this cube.
 
-        Args:
-
-        * cube:
+        Parameters
+        ----------
+        cube :
             The source cube to create the cube signature from.
 
-        Returns:
-            The cube signature.
+        Returns
+        -------
+        The cube signature.
 
         """
-
-        return _CubeSignature(cube.metadata, cube.shape,
-                              cube.dtype, cube._cell_measures_and_dims)
+        return _CubeSignature(
+            cube.metadata,
+            cube.shape,
+            cube.dtype,
+            cube._cell_measures_and_dims,
+            cube._ancillary_variables_and_dims,
+        )
 
     def _add_cube(self, cube, coord_payload):
         """Create and add the source-cube skeleton to the ProtoCube."""
-        skeleton = _Skeleton(coord_payload.scalar.values,
-                             cube.core_data())
+        skeleton = _Skeleton(coord_payload.scalar.values, cube.core_data())
         # Attempt to do something sensible with mixed scalar dtypes.
         for i, metadata in enumerate(coord_payload.scalar.metadata):
             if metadata.points_dtype > self._coord_metadata[i].points_dtype:
@@ -1620,8 +1668,7 @@ class ProtoCube(object):
         self._skeletons.append(skeleton)
 
     def _extract_coord_payload(self, cube):
-        """
-        Extract all relevant coordinate data and metadata from the cube.
+        """Extract all relevant coordinate data and metadata from the cube.
 
         In particular, for each scalar coordinate determine its definition,
         its cell (point and bound) value and all other scalar coordinate
@@ -1646,29 +1693,33 @@ class ProtoCube(object):
 
         # Coordinate hint ordering dictionary - from most preferred to least.
         # Copes with duplicate hint entries, where the most preferred is king.
-        hint_dict = {name: i for i, name in zip(range(len(self._hints), 0, -1),
-                                                self._hints[::-1])}
+        hint_dict = {
+            name: i
+            for i, name in zip(range(len(self._hints), 0, -1), self._hints[::-1])
+        }
         # Coordinate axis ordering dictionary.
-        axis_dict = {'T': 0, 'Z': 1, 'Y': 2, 'X': 3}
+        axis_dict = {"T": 0, "Z": 1, "Y": 2, "X": 3}
 
         # Coordinate sort function.
         # NB. This makes use of two properties which don't end up in
-        # the CoordDefn used by scalar_defns: `coord.points.dtype` and
+        # the metadata used by scalar_defns: `coord.points.dtype` and
         # `type(coord)`.
         def key_func(coord):
             points_dtype = coord.dtype
-            return (not np.issubdtype(points_dtype, np.number),
-                    not isinstance(coord, iris.coords.DimCoord),
-                    hint_dict.get(coord.name(), len(hint_dict) + 1),
-                    axis_dict.get(iris.util.guess_coord_axis(coord),
-                                  len(axis_dict) + 1),
-                    coord._as_defn())
+            return (
+                not np.issubdtype(points_dtype, np.number),
+                not isinstance(coord, iris.coords.DimCoord),
+                hint_dict.get(coord.name(), len(hint_dict) + 1),
+                axis_dict.get(iris.util.guess_coord_axis(coord), len(axis_dict) + 1),
+                coord.metadata,
+            )
 
         # Order the coordinates by hints, axis, and definition.
         for coord in sorted(coords, key=key_func):
-            if not cube.coord_dims(coord) and coord.shape == (1,):
+            dims = tuple(cube.coord_dims(coord))
+            if not dims and coord.shape == (1,):
                 # Extract the scalar coordinate data and metadata.
-                scalar_defns.append(coord._as_defn())
+                scalar_defns.append(coord.metadata)
                 # Because we know there's a single Cell in the
                 # coordinate, it's quicker to roll our own than use
                 # Coord.cell().
@@ -1683,33 +1734,31 @@ class ProtoCube(object):
                 scalar_values.append(iris.coords.Cell(points[0], bounds))
                 kwargs = {}
                 if isinstance(coord, iris.coords.DimCoord):
-                    kwargs['circular'] = coord.circular
-                scalar_metadata.append(_CoordMetaData(points_dtype,
-                                                      bounds_dtype, kwargs))
+                    kwargs["circular"] = coord.circular
+                scalar_metadata.append(
+                    _CoordMetaData(points_dtype, bounds_dtype, kwargs)
+                )
             else:
                 # Extract the vector coordinate and metadata.
                 if id(coord) in cube_aux_coord_ids:
-                    vector_aux_coords_and_dims.append(
-                        _CoordAndDims(coord, tuple(cube.coord_dims(coord))))
+                    vector_aux_coords_and_dims.append(_CoordAndDims(coord, dims))
                 else:
-                    vector_dim_coords_and_dims.append(
-                        _CoordAndDims(coord, tuple(cube.coord_dims(coord))))
+                    vector_dim_coords_and_dims.append(_CoordAndDims(coord, dims))
 
         factory_defns = []
-        for factory in sorted(cube.aux_factories,
-                              key=lambda factory: factory._as_defn()):
+        for factory in sorted(cube.aux_factories, key=lambda factory: factory.metadata):
             dependency_defns = []
             dependencies = factory.dependencies
             for key in sorted(dependencies):
                 coord = dependencies[key]
                 if coord is not None:
-                    dependency_defns.append((key, coord._as_defn()))
+                    dependency_defns.append((key, coord.metadata))
             factory_defn = _FactoryDefn(type(factory), dependency_defns)
             factory_defns.append(factory_defn)
 
-        scalar = _ScalarCoordPayload(scalar_defns, scalar_values,
-                                     scalar_metadata)
-        vector = _VectorCoordPayload(vector_dim_coords_and_dims,
-                                     vector_aux_coords_and_dims)
+        scalar = _ScalarCoordPayload(scalar_defns, scalar_values, scalar_metadata)
+        vector = _VectorCoordPayload(
+            vector_dim_coords_and_dims, vector_aux_coords_and_dims
+        )
 
         return _CoordPayload(scalar, vector, factory_defns)

@@ -1,27 +1,12 @@
-# (C) British Crown Copyright 2014 - 2019, Met Office
+# Copyright Iris contributors
 #
-# This file is part of Iris.
-#
-# Iris is free software: you can redistribute it and/or modify it under
-# the terms of the GNU Lesser General Public License as published by the
-# Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# Iris is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU Lesser General Public License for more details.
-#
-# You should have received a copy of the GNU Lesser General Public License
-# along with Iris.  If not, see <http://www.gnu.org/licenses/>.
+# This file is part of Iris and is released under the BSD license.
+# See LICENSE in the root of the repository for full licensing details.
 """Unit tests for :func:`iris.fileformats.um._fast_load._convert_collation`."""
-
-from __future__ import (absolute_import, division, print_function)
-from six.moves import (filter, input, map, range, zip)  # noqa
 
 # Import iris.tests first so that some things can be initialised before
 # importing anything else.
-import iris.tests as tests
+import iris.tests as tests  # isort:skip
 
 from unittest import mock
 
@@ -29,20 +14,24 @@ import cf_units
 import cftime
 import numpy as np
 
-from iris.fileformats.um._fast_load \
-    import _convert_collation as convert_collation
 import iris.aux_factory
 import iris.coord_systems
 import iris.coords
 import iris.fileformats.pp
 import iris.fileformats.rules
-
+from iris.fileformats.um._fast_load import _convert_collation as convert_collation
 
 COORD_SYSTEM = iris.coord_systems.GeogCS(6371229.0)
-LATITUDE = iris.coords.DimCoord([15, 0, -15], 'latitude', units='degrees',
-                                coord_system=COORD_SYSTEM)
-LONGITUDE = iris.coords.DimCoord([0, 20, 40, 60], 'longitude', units='degrees',
-                                 coord_system=COORD_SYSTEM, circular=True)
+LATITUDE = iris.coords.DimCoord(
+    [15, 0, -15], "latitude", units="degrees", coord_system=COORD_SYSTEM
+)
+LONGITUDE = iris.coords.DimCoord(
+    [0, 20, 40, 60],
+    "longitude",
+    units="degrees",
+    coord_system=COORD_SYSTEM,
+    circular=True,
+)
 
 
 class Test(tests.IrisTest):
@@ -70,10 +59,10 @@ class Test(tests.IrisTest):
         else:
             self.assertEqual(metadata.factories, [factory])
         self.assertEqual(metadata.references, [])
-        self.assertEqual(metadata.standard_name, 'x_wind')
+        self.assertEqual(metadata.standard_name, "x_wind")
         self.assertIsNone(metadata.long_name)
-        self.assertEqual(metadata.units, cf_units.Unit('m s-1'))
-        self.assertEqual(metadata.attributes, {'STASH': (1, 0, 2)})
+        self.assertEqual(metadata.units, cf_units.Unit("m s-1"))
+        self.assertEqual(metadata.attributes, {"STASH": (1, 0, 2)})
         self.assertEqual(metadata.cell_methods, [])
 
     def test_all_scalar(self):
@@ -81,19 +70,25 @@ class Test(tests.IrisTest):
         field.lbtim = 11
         field.t1 = cftime.datetime(1970, 1, 1, 18)
         field.t2 = cftime.datetime(1970, 1, 1, 12)
-        collation = mock.Mock(fields=[field], vector_dims_shape=(),
-                              element_arrays_and_dims={})
+        collation = mock.Mock(
+            fields=[field], vector_dims_shape=(), element_arrays_and_dims={}
+        )
         metadata = convert_collation(collation)
         self._check_phenomenon(metadata)
-        coords_and_dims = [(LONGITUDE, 1),
-                           (LATITUDE, 0)]
+        coords_and_dims = [(LONGITUDE, 1), (LATITUDE, 0)]
         self.assertEqual(metadata.dim_coords_and_dims, coords_and_dims)
         coords_and_dims = [
-            (iris.coords.DimCoord(18, 'time', units='hours since epoch'),
-             None),
-            (iris.coords.DimCoord(12, 'forecast_reference_time',
-                                  units='hours since epoch'), None),
-            (iris.coords.DimCoord(6, 'forecast_period', units='hours'), None)
+            (
+                iris.coords.DimCoord(18, "time", units="hours since epoch"),
+                None,
+            ),
+            (
+                iris.coords.DimCoord(
+                    12, "forecast_reference_time", units="hours since epoch"
+                ),
+                None,
+            ),
+            (iris.coords.DimCoord(6, "forecast_period", units="hours"), None),
         ]
         self.assertEqual(metadata.aux_coords_and_dims, coords_and_dims)
 
@@ -101,25 +96,41 @@ class Test(tests.IrisTest):
         field = self._field()
         field.lbtim = 11
         field.t2 = cftime.datetime(1970, 1, 1, 12)
-        t1 = ([cftime.datetime(1970, 1, 1, 18),
-               cftime.datetime(1970, 1, 2, 0),
-               cftime.datetime(1970, 1, 2, 6)], [0])
-        collation = mock.Mock(fields=[field], vector_dims_shape=(3,),
-                              element_arrays_and_dims={'t1': t1})
+        t1 = (
+            [
+                cftime.datetime(1970, 1, 1, 18),
+                cftime.datetime(1970, 1, 2, 0),
+                cftime.datetime(1970, 1, 2, 6),
+            ],
+            [0],
+        )
+        collation = mock.Mock(
+            fields=[field],
+            vector_dims_shape=(3,),
+            element_arrays_and_dims={"t1": t1},
+        )
         metadata = convert_collation(collation)
         self._check_phenomenon(metadata)
-        coords_and_dims = [(LONGITUDE, 2),
-                           (LATITUDE, 1),
-                           (iris.coords.DimCoord([18, 24, 30], 'time',
-                                                 units='hours since epoch'),
-                            (0,))
-                           ]
+        coords_and_dims = [
+            (LONGITUDE, 2),
+            (LATITUDE, 1),
+            (
+                iris.coords.DimCoord([18, 24, 30], "time", units="hours since epoch"),
+                (0,),
+            ),
+        ]
         self.assertEqual(metadata.dim_coords_and_dims, coords_and_dims)
         coords_and_dims = [
-            (iris.coords.DimCoord(12, 'forecast_reference_time',
-                                  units='hours since epoch'), None),
-            (iris.coords.DimCoord([6, 12, 18], 'forecast_period',
-                                  units='hours'), (0,))
+            (
+                iris.coords.DimCoord(
+                    12, "forecast_reference_time", units="hours since epoch"
+                ),
+                None,
+            ),
+            (
+                iris.coords.DimCoord([6, 12, 18], "forecast_period", units="hours"),
+                (0,),
+            ),
         ]
         self.assertEqual(metadata.aux_coords_and_dims, coords_and_dims)
 
@@ -127,28 +138,44 @@ class Test(tests.IrisTest):
         field = self._field()
         field.lbtim = 11
         field.t1 = cftime.datetime(1970, 1, 1, 18)
-        t2 = ([cftime.datetime(1970, 1, 1, 12),
-               cftime.datetime(1970, 1, 1, 15),
-               cftime.datetime(1970, 1, 1, 18)], [0])
-        collation = mock.Mock(fields=[field], vector_dims_shape=(3,),
-                              element_arrays_and_dims={'t2': t2})
+        t2 = (
+            [
+                cftime.datetime(1970, 1, 1, 12),
+                cftime.datetime(1970, 1, 1, 15),
+                cftime.datetime(1970, 1, 1, 18),
+            ],
+            [0],
+        )
+        collation = mock.Mock(
+            fields=[field],
+            vector_dims_shape=(3,),
+            element_arrays_and_dims={"t2": t2},
+        )
         metadata = convert_collation(collation)
         self._check_phenomenon(metadata)
-        coords_and_dims = [(LONGITUDE, 2),
-                           (LATITUDE, 1),
-                           (iris.coords.DimCoord([12, 15, 18],
-                                                 'forecast_reference_time',
-                                                 units='hours since epoch'),
-                            (0,))
-                           ]
+        coords_and_dims = [
+            (LONGITUDE, 2),
+            (LATITUDE, 1),
+            (
+                iris.coords.DimCoord(
+                    [12, 15, 18],
+                    "forecast_reference_time",
+                    units="hours since epoch",
+                ),
+                (0,),
+            ),
+        ]
         self.assertEqual(metadata.dim_coords_and_dims, coords_and_dims)
         coords_and_dims = [
-            (iris.coords.DimCoord(18, 'time', units='hours since epoch'),
-             None),
-            (iris.coords.DimCoord([6, 3, 0.], 'forecast_period',
-                                  units='hours'),
-             (0,))
-            ]
+            (
+                iris.coords.DimCoord(18, "time", units="hours since epoch"),
+                None,
+            ),
+            (
+                iris.coords.DimCoord([6, 3, 0.0], "forecast_period", units="hours"),
+                (0,),
+            ),
+        ]
         self.assertEqual(metadata.aux_coords_and_dims, coords_and_dims)
 
     def test_vector_lbft(self):
@@ -157,51 +184,92 @@ class Test(tests.IrisTest):
         field.t1 = cftime.datetime(1970, 1, 1, 12)
         field.t2 = cftime.datetime(1970, 1, 1, 18)
         lbft = ([18, 15, 12], [0])
-        collation = mock.Mock(fields=[field], vector_dims_shape=(3,),
-                              element_arrays_and_dims={'lbft': lbft})
+        collation = mock.Mock(
+            fields=[field],
+            vector_dims_shape=(3,),
+            element_arrays_and_dims={"lbft": lbft},
+        )
         metadata = convert_collation(collation)
         self._check_phenomenon(metadata)
-        coords_and_dims = [(LONGITUDE, 2),
-                           (LATITUDE, 1),
-                           (iris.coords.DimCoord([0, 3, 6],
-                                                 'forecast_reference_time',
-                                                 units='hours since epoch'),
-                            (0,))]
         coords_and_dims = [
-            (iris.coords.DimCoord(15, 'time', units='hours since epoch',
-                                  bounds=[[12, 18]]), None),
-            (iris.coords.DimCoord([15, 12, 9], 'forecast_period',
-                                  units='hours',
-                                  bounds=[[12, 18], [9, 15], [6, 12]]),
-             (0,))
+            (LONGITUDE, 2),
+            (LATITUDE, 1),
+            (
+                iris.coords.DimCoord(
+                    [0, 3, 6],
+                    "forecast_reference_time",
+                    units="hours since epoch",
+                ),
+                (0,),
+            ),
+        ]
+        coords_and_dims = [
+            (
+                iris.coords.DimCoord(
+                    15, "time", units="hours since epoch", bounds=[[12, 18]]
+                ),
+                None,
+            ),
+            (
+                iris.coords.DimCoord(
+                    [15, 12, 9],
+                    "forecast_period",
+                    units="hours",
+                    bounds=[[12, 18], [9, 15], [6, 12]],
+                ),
+                (0,),
+            ),
         ]
         self.assertEqual(metadata.aux_coords_and_dims, coords_and_dims)
 
     def test_vector_t1_and_t2(self):
         field = self._field()
         field.lbtim = 11
-        t1 = ([cftime.datetime(1970, 1, 2, 6),
-               cftime.datetime(1970, 1, 2, 9),
-               cftime.datetime(1970, 1, 2, 12)], [1])
-        t2 = ([cftime.datetime(1970, 1, 1, 12),
-               cftime.datetime(1970, 1, 2, 0)], [0])
-        collation = mock.Mock(fields=[field], vector_dims_shape=(2, 3),
-                              element_arrays_and_dims={'t1': t1, 't2': t2})
+        t1 = (
+            [
+                cftime.datetime(1970, 1, 2, 6),
+                cftime.datetime(1970, 1, 2, 9),
+                cftime.datetime(1970, 1, 2, 12),
+            ],
+            [1],
+        )
+        t2 = (
+            [cftime.datetime(1970, 1, 1, 12), cftime.datetime(1970, 1, 2, 0)],
+            [0],
+        )
+        collation = mock.Mock(
+            fields=[field],
+            vector_dims_shape=(2, 3),
+            element_arrays_and_dims={"t1": t1, "t2": t2},
+        )
         metadata = convert_collation(collation)
         self._check_phenomenon(metadata)
-        coords_and_dims = [(LONGITUDE, 3),
-                           (LATITUDE, 2),
-                           (iris.coords.DimCoord([30, 33, 36], 'time',
-                                                 units='hours since epoch'),
-                            (1,)),
-                           (iris.coords.DimCoord([12, 24],
-                                                 'forecast_reference_time',
-                                                 units='hours since epoch'),
-                            (0,))]
+        coords_and_dims = [
+            (LONGITUDE, 3),
+            (LATITUDE, 2),
+            (
+                iris.coords.DimCoord([30, 33, 36], "time", units="hours since epoch"),
+                (1,),
+            ),
+            (
+                iris.coords.DimCoord(
+                    [12, 24],
+                    "forecast_reference_time",
+                    units="hours since epoch",
+                ),
+                (0,),
+            ),
+        ]
         self.assertEqual(metadata.dim_coords_and_dims, coords_and_dims)
         coords_and_dims = [
-            (iris.coords.AuxCoord([[18, 21, 24], [6, 9, 12]],
-                                  'forecast_period', units='hours'), (0, 1))
+            (
+                iris.coords.AuxCoord(
+                    [[18, 21, 24], [6, 9, 12]],
+                    "forecast_period",
+                    units="hours",
+                ),
+                (0, 1),
+            )
         ]
         self.assertEqual(metadata.aux_coords_and_dims, coords_and_dims)
 
@@ -210,17 +278,23 @@ class Test(tests.IrisTest):
         field.lbvc = 8
         blev = ([1000, 850, 700], (0,))
         lblev = ([1000, 850, 700], (0,))
-        collation = mock.Mock(fields=[field], vector_dims_shape=(3,),
-                              element_arrays_and_dims={'blev': blev,
-                                                       'lblev': lblev})
+        collation = mock.Mock(
+            fields=[field],
+            vector_dims_shape=(3,),
+            element_arrays_and_dims={"blev": blev, "lblev": lblev},
+        )
         metadata = convert_collation(collation)
         self._check_phenomenon(metadata)
-        coords_and_dims = [(LONGITUDE, 2),
-                           (LATITUDE, 1),
-                           (iris.coords.DimCoord([1000, 850, 700],
-                                                 long_name='pressure',
-                                                 units='hPa'),
-                            (0,))]
+        coords_and_dims = [
+            (LONGITUDE, 2),
+            (LATITUDE, 1),
+            (
+                iris.coords.DimCoord(
+                    [1000, 850, 700], long_name="pressure", units="hPa"
+                ),
+                (0,),
+            ),
+        ]
         self.assertEqual(metadata.dim_coords_and_dims, coords_and_dims)
         coords_and_dims = []
         self.assertEqual(metadata.aux_coords_and_dims, coords_and_dims)
@@ -234,18 +308,24 @@ class Test(tests.IrisTest):
         lblev = (points, (0,))
         brsvd1 = (lower, (0,))
         brlev = (upper, (0,))
-        collation = mock.Mock(fields=[field], vector_dims_shape=(3,),
-                              element_arrays_and_dims={'lblev': lblev,
-                                                       'brsvd1': brsvd1,
-                                                       'brlev': brlev})
+        collation = mock.Mock(
+            fields=[field],
+            vector_dims_shape=(3,),
+            element_arrays_and_dims={
+                "lblev": lblev,
+                "brsvd1": brsvd1,
+                "brlev": brlev,
+            },
+        )
         metadata = convert_collation(collation)
         self._check_phenomenon(metadata)
-        level = iris.coords.DimCoord(points,
-                                     long_name='soil_model_level_number',
-                                     attributes={'positive': 'down'})
-        coords_and_dims = [(LONGITUDE, 2),
-                           (LATITUDE, 1),
-                           (level, (0,))]
+        level = iris.coords.DimCoord(
+            points,
+            long_name="soil_model_level_number",
+            attributes={"positive": "down"},
+            units="1",
+        )
+        coords_and_dims = [(LONGITUDE, 2), (LATITUDE, 1), (level, (0,))]
         self.assertEqual(metadata.dim_coords_and_dims, coords_and_dims)
         coords_and_dims = []
         self.assertEqual(metadata.aux_coords_and_dims, coords_and_dims)
@@ -259,19 +339,25 @@ class Test(tests.IrisTest):
         blev = (points, (0,))
         brsvd1 = (lower, (0,))
         brlev = (upper, (0,))
-        collation = mock.Mock(fields=[field], vector_dims_shape=(3,),
-                              element_arrays_and_dims={'blev': blev,
-                                                       'brsvd1': brsvd1,
-                                                       'brlev': brlev})
+        collation = mock.Mock(
+            fields=[field],
+            vector_dims_shape=(3,),
+            element_arrays_and_dims={
+                "blev": blev,
+                "brsvd1": brsvd1,
+                "brlev": brlev,
+            },
+        )
         metadata = convert_collation(collation)
         self._check_phenomenon(metadata)
-        depth = iris.coords.DimCoord(points, standard_name='depth',
-                                     bounds=np.vstack((lower, upper)).T,
-                                     units='m',
-                                     attributes={'positive': 'down'})
-        coords_and_dims = [(LONGITUDE, 2),
-                           (LATITUDE, 1),
-                           (depth, (0,))]
+        depth = iris.coords.DimCoord(
+            points,
+            standard_name="depth",
+            bounds=np.vstack((lower, upper)).T,
+            units="m",
+            attributes={"positive": "down"},
+        )
+        coords_and_dims = [(LONGITUDE, 2), (LATITUDE, 1), (depth, (0,))]
         self.assertEqual(metadata.dim_coords_and_dims, coords_and_dims)
         coords_and_dims = []
         self.assertEqual(metadata.aux_coords_and_dims, coords_and_dims)
@@ -287,40 +373,67 @@ class Test(tests.IrisTest):
         bhrlev = ([1, 0.9989, 0.9970], (0,))
         lblev = ([1, 2, 3], (0,))
         bhlev = ([0.9994, 0.9979, 0.9957], (0,))
-        collation = mock.Mock(fields=[field], vector_dims_shape=(3,),
-                              element_arrays_and_dims={'blev': blev,
-                                                       'lblev': lblev,
-                                                       'brsvd1': brsvd1,
-                                                       'brsvd2': brsvd2,
-                                                       'brlev': brlev,
-                                                       'bhrlev': bhrlev,
-                                                       'lblev': lblev,
-                                                       'bhlev': bhlev})
+        collation = mock.Mock(
+            fields=[field],
+            vector_dims_shape=(3,),
+            element_arrays_and_dims={
+                "blev": blev,
+                "lblev": lblev,
+                "brsvd1": brsvd1,
+                "brsvd2": brsvd2,
+                "brlev": brlev,
+                "bhrlev": bhrlev,
+                "lblev": lblev,
+                "bhlev": bhlev,
+            },
+        )
         metadata = convert_collation(collation)
         factory = iris.fileformats.rules.Factory(
             iris.aux_factory.HybridHeightFactory,
-            [{'long_name': 'level_height'}, {'long_name': 'sigma'},
-             iris.fileformats.rules.Reference('orography')])
+            [
+                {"long_name": "level_height"},
+                {"long_name": "sigma"},
+                iris.fileformats.rules.Reference("orography"),
+            ],
+        )
         self._check_phenomenon(metadata, factory)
-        coords_and_dims = [(LONGITUDE, 2),
-                           (LATITUDE, 1),
-                           (iris.coords.DimCoord([1, 2, 3],
-                                                 'model_level_number',
-                                                 attributes={'positive': 'up'}
-                                                 ),
-                            (0,))]
+        coords_and_dims = [
+            (LONGITUDE, 2),
+            (LATITUDE, 1),
+            (
+                iris.coords.DimCoord(
+                    [1, 2, 3],
+                    "model_level_number",
+                    attributes={"positive": "up"},
+                    units="1",
+                ),
+                (0,),
+            ),
+        ]
         self.assertEqual(metadata.dim_coords_and_dims, coords_and_dims)
         coords_and_dims = [
-            (iris.coords.DimCoord([5, 18, 38], long_name='level_height',
-                                  units='m', bounds=[[0, 10], [10, 26],
-                                                     [26, 50]],
-                                  attributes={'positive': 'up'}), (0,)),
-            (iris.coords.AuxCoord([0.9994, 0.9979, 0.9957], long_name='sigma',
-                                  bounds=[[1, 0.9989], [0.9989, 0.9970],
-                                          [0.9970, 0.9944]]), (0,))
+            (
+                iris.coords.DimCoord(
+                    [5, 18, 38],
+                    long_name="level_height",
+                    units="m",
+                    bounds=[[0, 10], [10, 26], [26, 50]],
+                    attributes={"positive": "up"},
+                ),
+                (0,),
+            ),
+            (
+                iris.coords.AuxCoord(
+                    [0.9994, 0.9979, 0.9957],
+                    long_name="sigma",
+                    bounds=[[1, 0.9989], [0.9989, 0.9970], [0.9970, 0.9944]],
+                    units="1",
+                ),
+                (0,),
+            ),
         ]
         self.assertEqual(metadata.aux_coords_and_dims, coords_and_dims)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     tests.main()

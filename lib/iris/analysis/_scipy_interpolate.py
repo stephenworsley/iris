@@ -1,11 +1,7 @@
-from __future__ import (absolute_import, division, print_function)
-from six.moves import (filter, input, map, range, zip)  # noqa
-
 import itertools
 
-from scipy.sparse import csr_matrix
 import numpy as np
-
+from scipy.sparse import csr_matrix
 
 # ============================================================================
 # |                        Copyright SciPy                                   |
@@ -15,11 +11,10 @@ import numpy as np
 
 # Source: https://github.com/scipy/scipy/blob/b94a5d5ccc08dddbc88453477ff2625\
 # 9aeaafb32/scipy/interpolate/interpnd.pyx#L167
-def _ndim_coords_from_arrays(points, ndim=None):
-    """
-    Convert a tuple of coordinate arrays to a (..., ndim)-shaped array.
 
-    """
+
+def _ndim_coords_from_arrays(points, ndim=None):
+    """Convert a tuple of coordinate arrays to a (..., ndim)-shaped array."""
     if isinstance(points, tuple) and len(points) == 1:
         # handle argument tuple
         points = points[0]
@@ -27,8 +22,7 @@ def _ndim_coords_from_arrays(points, ndim=None):
         p = np.broadcast_arrays(*points)
         for j in range(1, len(p)):
             if p[j].shape != p[0].shape:
-                raise ValueError(
-                    "coordinate arrays do not have the same shape")
+                raise ValueError("coordinate arrays do not have the same shape")
         points = np.empty(p[0].shape + (len(points),), dtype=float)
         for j, item in enumerate(p):
             points[..., j] = item
@@ -45,10 +39,8 @@ def _ndim_coords_from_arrays(points, ndim=None):
 
 # source: https://github.com/scipy/scipy/blob/b94a5d5ccc08dddbc88453477ff2625\
 # 9aeaafb32/scipy/interpolate/interpolate.py#L1400
-class _RegularGridInterpolator(object):
-
-    """
-    Interpolation on a regular grid in arbitrary dimensions
+class _RegularGridInterpolator:
+    """Interpolation on a regular grid in arbitrary dimensions.
 
     The data must be defined on a regular grid; the grid spacing however may be
     uneven.  Linear and nearest-neighbour interpolation are supported. After
@@ -91,51 +83,62 @@ class _RegularGridInterpolator(object):
     regular grid structure.
 
     """
+
     # this class is based on code originally programmed by Johannes Buchner,
     # see https://github.com/JohannesBuchner/regulargrid
 
-    def __init__(self, points, values, method="linear", bounds_error=True,
-                 fill_value=np.nan):
+    def __init__(
+        self,
+        points,
+        values,
+        method="linear",
+        bounds_error=True,
+        fill_value=np.nan,
+    ):
         if method not in ["linear", "nearest"]:
             raise ValueError("Method '%s' is not defined" % method)
         self.method = method
         self.bounds_error = bounds_error
 
-        if not hasattr(values, 'ndim'):
+        if not hasattr(values, "ndim"):
             # allow reasonable duck-typed values
             values = np.asarray(values)
 
         if len(points) > values.ndim:
-            raise ValueError("There are %d point arrays, but values has %d "
-                             "dimensions" % (len(points), values.ndim))
+            raise ValueError(
+                "There are %d point arrays, but values has %d "
+                "dimensions" % (len(points), values.ndim)
+            )
 
-        if hasattr(values, 'dtype') and hasattr(values, 'astype'):
+        if hasattr(values, "dtype") and hasattr(values, "astype"):
             if not np.issubdtype(values.dtype, np.inexact):
                 values = values.astype(float)
 
         self.fill_value = fill_value
         if fill_value is not None:
-            if hasattr(values, 'dtype') and not np.can_cast(fill_value,
-                                                            values.dtype):
-                raise ValueError("fill_value must be either 'None' or "
-                                 "of a type compatible with values")
+            if hasattr(values, "dtype") and not np.can_cast(fill_value, values.dtype):
+                raise ValueError(
+                    "fill_value must be either 'None' or "
+                    "of a type compatible with values"
+                )
 
         for i, p in enumerate(points):
-            if not np.all(np.diff(p) > 0.):
-                raise ValueError("The points in dimension %d must be strictly "
-                                 "ascending" % i)
+            if not np.all(np.diff(p) > 0.0):
+                raise ValueError(
+                    "The points in dimension %d must be strictly ascending" % i
+                )
             if not np.asarray(p).ndim == 1:
-                raise ValueError("The points in dimension %d must be "
-                                 "1-dimensional" % i)
+                raise ValueError("The points in dimension %d must be 1-dimensional" % i)
             if not values.shape[i] == len(p):
-                raise ValueError("There are %d points and %d values in "
-                                 "dimension %d" % (len(p), values.shape[i], i))
+                raise ValueError(
+                    "There are %d points and %d values in "
+                    "dimension %d" % (len(p), values.shape[i], i)
+                )
         self.grid = tuple([np.asarray(p) for p in points])
         self.values = values
 
     def __call__(self, xi, method=None):
-        """
-        Interpolation at coordinates
+        """Interpolation at coordinates.
 
         Parameters
         ----------
@@ -153,8 +156,7 @@ class _RegularGridInterpolator(object):
         return self.interp_using_pre_computed_weights(weights)
 
     def compute_interp_weights(self, xi, method=None):
-        """
-        Prepare the interpolator for interpolation to the given sample points.
+        """Prepare the interpolator for interpolation to the given sample points.
 
         .. note::
             This interface provides the ability to reuse weights on multiple
@@ -186,60 +188,67 @@ class _RegularGridInterpolator(object):
         ndim = len(self.grid)
         xi = _ndim_coords_from_arrays(xi, ndim=ndim)
         if xi.shape[-1] != ndim:
-            raise ValueError("The requested sample points xi have dimension "
-                             "%d, but this RegularGridInterpolator has "
-                             "dimension %d" % (xi.shape[1], ndim))
+            raise ValueError(
+                "The requested sample points xi have dimension "
+                "%d, but this RegularGridInterpolator has "
+                "dimension %d" % (xi.shape[1], ndim)
+            )
 
         xi_shape = xi.shape
         xi = xi.reshape(-1, xi_shape[-1])
 
         if self.bounds_error:
             for i, p in enumerate(xi.T):
-                if not np.logical_and(np.all(self.grid[i][0] <= p),
-                                      np.all(p <= self.grid[i][-1])):
-                    raise ValueError("One of the requested xi is out of "
-                                     "bounds in dimension %d" % i)
+                if not np.logical_and(
+                    np.all(self.grid[i][0] <= p), np.all(p <= self.grid[i][-1])
+                ):
+                    raise ValueError(
+                        "One of the requested xi is out of "
+                        "bounds in dimension %d" % i
+                    )
 
         method = self.method if method is None else method
         prepared = (xi_shape, method) + self._find_indices(xi.T)
 
-        if method == 'linear':
-
+        if method == "linear":
             xi_shape, method, indices, norm_distances, out_of_bounds = prepared
 
             # Allocate arrays for describing the sparse matrix.
-            n_src_values_per_result_value = 2 ** ndim
+            n_src_values_per_result_value = 2**ndim
             n_result_values = len(indices[0])
             n_non_zero = n_result_values * n_src_values_per_result_value
             weights = np.ones(n_non_zero, dtype=norm_distances[0].dtype)
             col_indices = np.empty(n_non_zero)
-            row_ptrs = np.arange(0, n_non_zero + n_src_values_per_result_value,
-                                 n_src_values_per_result_value)
+            row_ptrs = np.arange(
+                0,
+                n_non_zero + n_src_values_per_result_value,
+                n_src_values_per_result_value,
+            )
 
-            corners = itertools.product(*[[(i, 1 - n), (i + 1, n)]
-                                          for i, n in zip(indices,
-                                                          norm_distances)])
+            corners = itertools.product(
+                *[[(i, 1 - n), (i + 1, n)] for i, n in zip(indices, norm_distances)]
+            )
             shape = self.values.shape[:ndim]
 
             for i, corner in enumerate(corners):
                 corner_indices = [ci for ci, cw in corner]
-                n_indices = np.ravel_multi_index(corner_indices, shape,
-                                                 mode='wrap')
+                n_indices = np.ravel_multi_index(corner_indices, shape, mode="wrap")
                 col_indices[i::n_src_values_per_result_value] = n_indices
                 for ci, cw in corner:
                     weights[i::n_src_values_per_result_value] *= cw
 
             n_src_values = np.prod(list(map(len, self.grid)))
-            sparse_matrix = csr_matrix((weights, col_indices, row_ptrs),
-                                       shape=(n_result_values, n_src_values))
+            sparse_matrix = csr_matrix(
+                (weights, col_indices, row_ptrs),
+                shape=(n_result_values, n_src_values),
+            )
 
             prepared = (xi_shape, method, sparse_matrix, None, out_of_bounds)
 
         return prepared
 
     def interp_using_pre_computed_weights(self, computed_weights):
-        """
-        Perform the interpolation using pre-computed interpolation weights.
+        """Perform the interpolation using pre-computed interpolation weights.
 
         .. note::
             This interface provides the ability to reuse weights on multiple
@@ -254,8 +263,13 @@ class _RegularGridInterpolator(object):
             :meth:`compute_interp_weights`.
 
         """
-        [xi_shape, method, indices, norm_distances,
-         out_of_bounds] = computed_weights
+        [
+            xi_shape,
+            method,
+            indices,
+            norm_distances,
+            out_of_bounds,
+        ] = computed_weights
 
         method = self.method if method is None else method
         if method not in ["linear", "nearest"]:
@@ -266,8 +280,7 @@ class _RegularGridInterpolator(object):
         if method == "linear":
             result = self._evaluate_linear_sparse(indices)
         elif method == "nearest":
-            result = self._evaluate_nearest(
-                indices, norm_distances, out_of_bounds)
+            result = self._evaluate_nearest(indices, norm_distances, out_of_bounds)
         if not self.bounds_error and self.fill_value is not None:
             result[out_of_bounds] = self.fill_value
 
@@ -286,7 +299,7 @@ class _RegularGridInterpolator(object):
     def _evaluate_nearest(self, indices, norm_distances, out_of_bounds):
         idx_res = []
         for i, yi in zip(indices, norm_distances):
-            idx_res.append(np.where(yi <= .5, i, i + 1))
+            idx_res.append(np.where(yi <= 0.5, i, i + 1))
         return self.values[tuple(idx_res)]
 
     def _find_indices(self, xi):
@@ -306,12 +319,12 @@ class _RegularGridInterpolator(object):
             if grid.size == 1:
                 norm_distances.append(x - grid[i])
             else:
-                norm_distances.append((x - grid[i]) /
-                                      (grid[i + 1] - grid[i]))
+                norm_distances.append((x - grid[i]) / (grid[i + 1] - grid[i]))
             if not self.bounds_error:
                 out_of_bounds += x < grid[0]
                 out_of_bounds += x > grid[-1]
         return indices, norm_distances, out_of_bounds
+
 
 # ============================================================================
 # |                        END SciPy copyright                               |

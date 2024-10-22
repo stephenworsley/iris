@@ -1,21 +1,8 @@
-# (C) British Crown Copyright 2010 - 2019, Met Office
+# Copyright Iris contributors
 #
-# This file is part of Iris.
-#
-# Iris is free software: you can redistribute it and/or modify it under
-# the terms of the GNU Lesser General Public License as published by the
-# Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# Iris is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU Lesser General Public License for more details.
-#
-# You should have received a copy of the GNU Lesser General Public License
-# along with Iris.  If not, see <http://www.gnu.org/licenses/>.
-"""
-A package for handling multi-dimensional data and associated metadata.
+# This file is part of Iris and is released under the BSD license.
+# See LICENSE in the root of the repository for full licensing details.
+"""A package for handling multi-dimensional data and associated metadata.
 
 .. note ::
 
@@ -46,72 +33,79 @@ To persist a cube to the file-system, use the :func:`save` function.
 
 All the load functions share very similar arguments:
 
-    * uris:
-        Either a single filename/URI expressed as a string, or an
-        iterable of filenames/URIs.
+* uris:
+    Either a single filename/URI expressed as a string or
+    :class:`pathlib.PurePath`, or an iterable of filenames/URIs.
 
-        Filenames can contain `~` or `~user` abbreviations, and/or
-        Unix shell-style wildcards (e.g. `*` and `?`). See the
-        standard library function :func:`os.path.expanduser` and
-        module :mod:`fnmatch` for more details.
+    Filenames can contain `~` or `~user` abbreviations, and/or
+    Unix shell-style wildcards (e.g. `*` and `?`). See the
+    standard library function :func:`os.path.expanduser` and
+    module :mod:`fnmatch` for more details.
 
-    * constraints:
-        Either a single constraint, or an iterable of constraints.
-        Each constraint can be either a string, an instance of
-        :class:`iris.Constraint`, or an instance of
-        :class:`iris.AttributeConstraint`.  If the constraint is a string
-        it will be used to match against cube.name().
+    .. warning::
 
-        .. _constraint_egs:
+        If supplying a URL, only OPeNDAP Data Sources are supported.
 
-        For example::
+* constraints:
+    Either a single constraint, or an iterable of constraints.
+    Each constraint can be either a string, an instance of
+    :class:`iris.Constraint`, or an instance of
+    :class:`iris.AttributeConstraint`.  If the constraint is a string
+    it will be used to match against cube.name().
 
-            # Load air temperature data.
-            load_cube(uri, 'air_temperature')
+    .. _constraint_egs:
 
-            # Load data with a specific model level number.
-            load_cube(uri, iris.Constraint(model_level_number=1))
+    For example::
 
-            # Load data with a specific STASH code.
-            load_cube(uri, iris.AttributeConstraint(STASH='m01s00i004'))
+        # Load air temperature data.
+        load_cube(uri, 'air_temperature')
 
-    * callback:
-        A function to add metadata from the originating field and/or URI which
-        obeys the following rules:
+        # Load data with a specific model level number.
+        load_cube(uri, iris.Constraint(model_level_number=1))
 
-        1. Function signature must be: ``(cube, field, filename)``.
-        2. Modifies the given cube inplace, unless a new cube is
-           returned by the function.
-        3. If the cube is to be rejected the callback must raise
-           an :class:`iris.exceptions.IgnoreCubeException`.
+        # Load data with a specific STASH code.
+        load_cube(uri, iris.AttributeConstraint(STASH='m01s00i004'))
 
-        For example::
+* callback:
+    A function to add metadata from the originating field and/or URI which
+    obeys the following rules:
 
-            def callback(cube, field, filename):
-                # Extract ID from filenames given as: <prefix>__<exp_id>
-                experiment_id = filename.split('__')[1]
-                experiment_coord = iris.coords.AuxCoord(
-                    experiment_id, long_name='experiment_id')
-                cube.add_aux_coord(experiment_coord)
+    1. Function signature must be: ``(cube, field, filename)``.
+    2. Modifies the given cube inplace, unless a new cube is
+       returned by the function.
+    3. If the cube is to be rejected the callback must raise
+       an :class:`iris.exceptions.IgnoreCubeException`.
+
+    For example::
+
+        def callback(cube, field, filename):
+            # Extract ID from filenames given as: <prefix>__<exp_id>
+            experiment_id = filename.split('__')[1]
+            experiment_coord = iris.coords.AuxCoord(
+                experiment_id, long_name='experiment_id')
+            cube.add_aux_coord(experiment_coord)
 
 """
 
-from __future__ import (absolute_import, division, print_function)
-from six.moves import (filter, input, map, range, zip)  # noqa
-import six
-
+from collections.abc import Iterable
 import contextlib
 import glob
+import importlib
 import itertools
 import os.path
 import threading
+from typing import Callable, Literal
 
-import iris.config
-import iris.cube
 import iris._constraints
-from iris._deprecation import IrisDeprecation, warn_deprecated
-import iris.fileformats
+import iris.config
 import iris.io
+
+from ._deprecation import IrisDeprecation, warn_deprecated
+
+try:
+    from ._version import version as __version__  # noqa: F401
+except ModuleNotFoundError:
+    __version__ = "unknown"
 
 
 try:
@@ -120,71 +114,101 @@ except ImportError:
     iris_sample_data = None
 
 
-# Iris revision.
-__version__ = '3.0.dev0'
-
 # Restrict the names imported when using "from iris import *"
-__all__ = ['load', 'load_cube', 'load_cubes', 'load_raw',
-           'save', 'Constraint', 'AttributeConstraint', 'sample_data_path',
-           'site_configuration', 'Future', 'FUTURE',
-           'IrisDeprecation']
+__all__ = [
+    "AttributeConstraint",
+    "Constraint",
+    "FUTURE",
+    "Future",
+    "IrisDeprecation",
+    "NameConstraint",
+    "load",
+    "load_cube",
+    "load_cubes",
+    "load_raw",
+    "sample_data_path",
+    "save",
+    "site_configuration",
+    "use_plugin",
+]
 
 
 Constraint = iris._constraints.Constraint
 AttributeConstraint = iris._constraints.AttributeConstraint
+NameConstraint = iris._constraints.NameConstraint
 
 
 class Future(threading.local):
     """Run-time configuration controller."""
 
-    def __init__(self):
-        """
-        A container for run-time options controls.
+    def __init__(self, datum_support=False, pandas_ndim=False, save_split_attrs=False):
+        """Container for run-time options controls.
 
         To adjust the values simply update the relevant attribute from
         within your code. For example::
 
+            # example_future_flag is a fictional example.
             iris.FUTURE.example_future_flag = False
 
         If Iris code is executed with multiple threads, note the values of
         these options are thread-specific.
 
-        .. note::
-
-            iris.FUTURE.example_future_flag does not exist. It is provided
-            as an example because there are currently no flags in
-            iris.Future.
+        Parameters
+        ----------
+        datum_support : bool, default=False
+            Opts in to loading coordinate system datum information from NetCDF
+            files into :class:`~iris.coord_systems.CoordSystem`, wherever
+            this information is present.
+        pandas_ndim : bool, default=False
+            See :func:`iris.pandas.as_data_frame` for details - opts in to the
+            newer n-dimensional behaviour.
+        save_split_attrs : bool, default=False
+            Save "global" and "local" cube attributes to netcdf in appropriately
+            different ways :  "global" ones are saved as dataset attributes, where
+            possible, while "local" ones are saved as data-variable attributes.
+            See :func:`iris.fileformats.netcdf.saver.save`.
 
         """
-        # The flag 'example_future_flag' is provided as a future reference
-        # for the structure of this class.
+        # The flag 'example_future_flag' is provided as a reference for the
+        # structure of this class.
+        #
+        # Note that self.__dict__ is used explicitly due to the manner in which
+        # __setattr__ is overridden.
         #
         # self.__dict__['example_future_flag'] = example_future_flag
-        pass
+        self.__dict__["datum_support"] = datum_support
+        self.__dict__["pandas_ndim"] = pandas_ndim
+        self.__dict__["save_split_attrs"] = save_split_attrs
+
+        # TODO: next major release: set IrisDeprecation to subclass
+        #  DeprecationWarning instead of UserWarning.
 
     def __repr__(self):
-
         # msg = ('Future(example_future_flag={})')
         # return msg.format(self.example_future_flag)
-        msg = ('Future()')
-        return msg.format()
+        msg = "Future(datum_support={}, pandas_ndim={}, save_split_attrs={})"
+        return msg.format(self.datum_support, self.pandas_ndim, self.save_split_attrs)
 
     # deprecated_options = {'example_future_flag': 'warning',}
-    deprecated_options = {}
+    deprecated_options: dict[str, Literal["error", "warning"]] = {}
 
     def __setattr__(self, name, value):
         if name in self.deprecated_options:
             level = self.deprecated_options[name]
-            if level == 'error' and not value:
-                emsg = ("setting the 'Future' property {prop!r} has been "
-                        "deprecated to be removed in a future release, and "
-                        "deprecated {prop!r} behaviour has been removed. "
-                        "Please remove code that sets this property.")
+            if level == "error" and not value:
+                emsg = (
+                    "setting the 'Future' property {prop!r} has been "
+                    "deprecated to be removed in a future release, and "
+                    "deprecated {prop!r} behaviour has been removed. "
+                    "Please remove code that sets this property."
+                )
                 raise AttributeError(emsg.format(prop=name))
             else:
-                msg = ("setting the 'Future' property {!r} is deprecated "
-                       "and will be removed in a future release. "
-                       "Please remove code that sets this property.")
+                msg = (
+                    "setting the 'Future' property {!r} is deprecated "
+                    "and will be removed in a future release. "
+                    "Please remove code that sets this property."
+                )
                 warn_deprecated(msg.format(name))
         if name not in self.__dict__:
             msg = "'Future' object has no attribute {!r}".format(name)
@@ -193,29 +217,23 @@ class Future(threading.local):
 
     @contextlib.contextmanager
     def context(self, **kwargs):
-        """
-        Return a context manager which allows temporary modification of
-        the option values for the active thread.
+        """Return context manager for temp modification of option values for the active thread.
 
         On entry to the `with` statement, all keyword arguments are
         applied to the Future object. On exit from the `with`
         statement, the previous state is restored.
 
         For example::
+
+            # example_future_flag is a fictional example.
             with iris.FUTURE.context(example_future_flag=False):
                 # ... code that expects some past behaviour
-
-        .. note::
-
-            iris.FUTURE.example_future_flag does not exist and is
-            provided only as an example since there are currently no
-            flags in Future.
 
         """
         # Save the current context
         current_state = self.__dict__.copy()
         # Update the state
-        for name, value in six.iteritems(kwargs):
+        for name, value in kwargs.items():
             setattr(self, name, value)
         try:
             yield
@@ -231,7 +249,10 @@ FUTURE = Future()
 
 # Initialise the site configuration dictionary.
 #: Iris site configuration dictionary.
-site_configuration = {}
+site_configuration: dict[
+    Literal["cf_profile", "cf_patch", "cf_patch_conventions"],
+    Callable | Literal[False] | None,
+] = {}
 
 try:
     from iris.site_config import update as _update
@@ -242,58 +263,65 @@ else:
 
 
 def _generate_cubes(uris, callback, constraints):
-    """Returns a generator of cubes given the URIs and a callback."""
-    if isinstance(uris, six.string_types):
+    """Return a generator of cubes given the URIs and a callback."""
+    if isinstance(uris, str) or not isinstance(uris, Iterable):
+        # Make a string, or other single item, into an iterable.
         uris = [uris]
 
     # Group collections of uris by their iris handler
     # Create list of tuples relating schemes to part names
     uri_tuples = sorted(iris.io.decode_uri(uri) for uri in uris)
 
-    for scheme, groups in (itertools.groupby(uri_tuples, key=lambda x: x[0])):
+    for scheme, groups in itertools.groupby(uri_tuples, key=lambda x: x[0]):
         # Call each scheme handler with the appropriate URIs
-        if scheme == 'file':
+        if scheme == "file":
             part_names = [x[1] for x in groups]
             for cube in iris.io.load_files(part_names, callback, constraints):
                 yield cube
-        elif scheme in ['http', 'https']:
-            urls = [':'.join(x) for x in groups]
+        elif scheme in ["http", "https"]:
+            urls = [":".join(x) for x in groups]
             for cube in iris.io.load_http(urls, callback):
                 yield cube
+        elif scheme == "data":
+            data_objects = [x[1] for x in groups]
+            for cube in iris.io.load_data_objects(data_objects, callback):
+                yield cube
         else:
-            raise ValueError('Iris cannot handle the URI scheme: %s' % scheme)
+            raise ValueError("Iris cannot handle the URI scheme: %s" % scheme)
 
 
 def _load_collection(uris, constraints=None, callback=None):
+    from iris.cube import _CubeFilterCollection
+
     try:
         cubes = _generate_cubes(uris, callback, constraints)
-        result = iris.cube._CubeFilterCollection.from_cubes(cubes, constraints)
+        result = _CubeFilterCollection.from_cubes(cubes, constraints)
     except EOFError as e:
         raise iris.exceptions.TranslationError(
-            "The file appears empty or incomplete: {!r}".format(str(e)))
+            "The file appears empty or incomplete: {!r}".format(str(e))
+        )
     return result
 
 
 def load(uris, constraints=None, callback=None):
-    """
-    Loads any number of Cubes for each constraint.
+    """Load any number of Cubes for each constraint.
 
     For a full description of the arguments, please see the module
     documentation for :mod:`iris`.
 
-    Args:
-
-    * uris:
-        One or more filenames/URIs.
-
-    Kwargs:
-
-    * constraints:
+    Parameters
+    ----------
+    uris : str or :class:`pathlib.PurePath`
+        One or more filenames/URIs, as a string or :class:`pathlib.PurePath`.
+        If supplying a URL, only OPeNDAP Data Sources are supported.
+    constraints : optional
         One or more constraints.
-    * callback:
+    callback : optional
         A modifier/filter function.
 
-    Returns:
+    Returns
+    -------
+    :class:`iris.cube.CubeList`
         An :class:`iris.cube.CubeList`. Note that there is no inherent order
         to this :class:`iris.cube.CubeList` and it should be treated as if it
         were random.
@@ -303,31 +331,29 @@ def load(uris, constraints=None, callback=None):
 
 
 def load_cube(uris, constraint=None, callback=None):
-    """
-    Loads a single cube.
+    """Load a single cube.
 
     For a full description of the arguments, please see the module
     documentation for :mod:`iris`.
 
-    Args:
-
-    * uris:
-        One or more filenames/URIs.
-
-    Kwargs:
-
-    * constraints:
+    Parameters
+    ----------
+    uris :
+        One or more filenames/URIs, as a string or :class:`pathlib.PurePath`.
+        If supplying a URL, only OPeNDAP Data Sources are supported.
+    constraints : optional
         A constraint.
-    * callback:
+    callback : optional
         A modifier/filter function.
 
-    Returns:
-        An :class:`iris.cube.Cube`.
+    Returns
+    -------
+    :class:`iris.cube.Cube`
 
     """
     constraints = iris._constraints.list_of_constraints(constraint)
     if len(constraints) != 1:
-        raise ValueError('only a single constraint is allowed')
+        raise ValueError("only a single constraint is allowed")
 
     cubes = _load_collection(uris, constraints, callback).cubes()
 
@@ -336,31 +362,30 @@ def load_cube(uris, constraint=None, callback=None):
     except iris.exceptions.MergeError as e:
         raise iris.exceptions.ConstraintMismatchError(str(e))
     except ValueError:
-        raise iris.exceptions.ConstraintMismatchError('no cubes found')
+        raise iris.exceptions.ConstraintMismatchError("no cubes found")
 
     return cube
 
 
 def load_cubes(uris, constraints=None, callback=None):
-    """
-    Loads exactly one Cube for each constraint.
+    """Load exactly one Cube for each constraint.
 
     For a full description of the arguments, please see the module
     documentation for :mod:`iris`.
 
-    Args:
-
-    * uris:
-        One or more filenames/URIs.
-
-    Kwargs:
-
-    * constraints:
+    Parameters
+    ----------
+    uris :
+        One or more filenames/URIs, as a string or :class:`pathlib.PurePath`.
+        If supplying a URL, only OPeNDAP Data Sources are supported.
+    constraints : optional
         One or more constraints.
-    * callback:
+    callback : optional
         A modifier/filter function.
 
-    Returns:
+    Returns
+    -------
+    :class:`iris.cube.CubeList`
         An :class:`iris.cube.CubeList`. Note that there is no inherent order
         to this :class:`iris.cube.CubeList` and it should be treated as if it
         were random.
@@ -372,17 +397,16 @@ def load_cubes(uris, constraints=None, callback=None):
     # Make sure we have exactly one merged cube per constraint
     bad_pairs = [pair for pair in collection.pairs if len(pair) != 1]
     if bad_pairs:
-        fmt = '   {} -> {} cubes'
+        fmt = "   {} -> {} cubes"
         bits = [fmt.format(pair.constraint, len(pair)) for pair in bad_pairs]
-        msg = '\n' + '\n'.join(bits)
+        msg = "\n" + "\n".join(bits)
         raise iris.exceptions.ConstraintMismatchError(msg)
 
     return collection.cubes()
 
 
 def load_raw(uris, constraints=None, callback=None):
-    """
-    Loads non-merged cubes.
+    """Load non-merged cubes.
 
     This function is provided for those occasions where the automatic
     combination of cubes into higher-dimensional cubes is undesirable.
@@ -393,23 +417,23 @@ def load_raw(uris, constraints=None, callback=None):
     For a full description of the arguments, please see the module
     documentation for :mod:`iris`.
 
-    Args:
-
-    * uris:
-        One or more filenames/URIs.
-
-    Kwargs:
-
-    * constraints:
+    Parameters
+    ----------
+    uris :
+        One or more filenames/URIs, as a string or :class:`pathlib.PurePath`.
+        If supplying a URL, only OPeNDAP Data Sources are supported.
+    constraints : optional
         One or more constraints.
-    * callback:
+    callback : optional
         A modifier/filter function.
 
-    Returns:
-        An :class:`iris.cube.CubeList`.
+    Returns
+    -------
+    :class:`iris.cube.CubeList`
 
     """
     from iris.fileformats.um._fast_load import _raw_structured_loading
+
     with _raw_structured_loading():
         return _load_collection(uris, constraints, callback).cubes()
 
@@ -418,8 +442,7 @@ save = iris.io.save
 
 
 def sample_data_path(*path_to_join):
-    """
-    Given the sample data resource, returns the full path to the file.
+    """Given the sample data resource, returns the full path to the file.
 
     .. note::
 
@@ -430,18 +453,48 @@ def sample_data_path(*path_to_join):
     """
     target = os.path.join(*path_to_join)
     if os.path.isabs(target):
-        raise ValueError('Absolute paths, such as {!r}, are not supported.\n'
-                         'NB. This function is only for locating files in the '
-                         'iris sample data collection. It is not needed or '
-                         'appropriate for general file access.'.format(target))
+        raise ValueError(
+            "Absolute paths, such as {!r}, are not supported.\n"
+            "NB. This function is only for locating files in the "
+            "iris sample data collection. It is not needed or "
+            "appropriate for general file access.".format(target)
+        )
     if iris_sample_data is not None:
         target = os.path.join(iris_sample_data.path, target)
     else:
-        raise ImportError("Please install the 'iris-sample-data' package to "
-                          "access sample data.")
+        raise ImportError(
+            "Please install the 'iris-sample-data' package to access sample data."
+        )
     if not glob.glob(target):
-        raise ValueError('Sample data file(s) at {!r} not found.\n'
-                         'NB. This function is only for locating files in the '
-                         'iris sample data collection. It is not needed or '
-                         'appropriate for general file access.'.format(target))
+        raise ValueError(
+            "Sample data file(s) at {!r} not found.\n"
+            "NB. This function is only for locating files in the "
+            "iris sample data collection. It is not needed or "
+            "appropriate for general file access.".format(target)
+        )
     return target
+
+
+def use_plugin(plugin_name):
+    """Import a plugin.
+
+    Parameters
+    ----------
+    plugin_name : str
+        Name of plugin.
+
+    Examples
+    --------
+    The following::
+
+        use_plugin("my_plugin")
+
+    is equivalent to::
+
+        import iris.plugins.my_plugin
+
+    This is useful for plugins that are not used directly, but instead do all
+    their setup on import.  In this case, style checkers would not know the
+    significance of the import statement and warn that it is an unused import.
+    """
+    importlib.import_module(f"iris.plugins.{plugin_name}")

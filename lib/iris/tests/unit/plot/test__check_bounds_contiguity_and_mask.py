@@ -1,28 +1,14 @@
-# (C) British Crown Copyright 2018 - 2019, Met Office
+# Copyright Iris contributors
 #
-# This file is part of Iris.
-#
-# Iris is free software: you can redistribute it and/or modify it under
-# the terms of the GNU Lesser General Public License as published by the
-# Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# Iris is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU Lesser General Public License for more details.
-#
-# You should have received a copy of the GNU Lesser General Public License
-# along with Iris.  If not, see <http://www.gnu.org/licenses/>.
+# This file is part of Iris and is released under the BSD license.
+# See LICENSE in the root of the repository for full licensing details.
 """Unit tests for the `iris.plot._check_bounds_contiguity_and_mask`
-function."""
-
-from __future__ import (absolute_import, division, print_function)
-from six.moves import (filter, input, map, range, zip)  # noqa
+function.
+"""
 
 # Import iris.tests first so that some things can be initialised before
 # importing anything else.
-import iris.tests as tests
+import iris.tests as tests  # isort:skip
 
 from unittest import mock
 
@@ -30,14 +16,8 @@ import numpy as np
 import numpy.ma as ma
 
 from iris.coords import DimCoord
-from iris.tests.stock import (sample_2d_latlons,
-                              make_bounds_discontiguous_at_point)
-
 from iris.plot import _check_bounds_contiguity_and_mask
-
-
-if tests.MPL_AVAILABLE:
-    import iris.plot as iplt
+from iris.tests.stock import make_bounds_discontiguous_at_point, sample_2d_latlons
 
 
 @tests.skip_plot
@@ -67,27 +47,31 @@ class Test_check_bounds_contiguity_and_mask(tests.IrisTest):
         # discontiguities.
         coord = DimCoord([1, 3, 5], bounds=[[0, 2], [2, 4], [5, 6]])
         data = ma.array(np.array([278, 300, 282]), mask=[1, 0, 0])
-        msg = 'coordinate are not contiguous and data is not masked where ' \
-              'the discontiguity occurs'
-        with self.assertRaisesRegexp(ValueError, msg):
+        msg = (
+            "coordinate are not contiguous and data is not masked where "
+            "the discontiguity occurs"
+        )
+        with self.assertRaisesRegex(ValueError, msg):
             _check_bounds_contiguity_and_mask(coord, data, atol=1e-3)
 
     def test_2d_contiguous(self):
         # Test that a 2D coordinate which is contiguous does not throw
         # an error.
         cube = sample_2d_latlons()
-        _check_bounds_contiguity_and_mask(cube.coord('longitude'), cube.data)
+        _check_bounds_contiguity_and_mask(cube.coord("longitude"), cube.data)
 
     def test_2d_contiguous_atol(self):
         # Check the atol is passed correctly.
         cube = sample_2d_latlons()
-        with mock.patch('iris.coords.Coord._discontiguity_in_bounds'
-                        ) as discontiguity_check:
+        with mock.patch(
+            "iris.coords.Coord._discontiguity_in_bounds"
+        ) as discontiguity_check:
             # Discontiguity returns two objects that are unpacked in
             # `_check_bounds_contiguity_and_mask`.
             discontiguity_check.return_value = [True, None]
-            _check_bounds_contiguity_and_mask(cube.coord('longitude'),
-                                              cube.data, atol=1e-3)
+            _check_bounds_contiguity_and_mask(
+                cube.coord("longitude"), cube.data, atol=1e-3
+            )
         discontiguity_check.assert_called_with(atol=1e-3)
 
     def test_2d_discontigous_masked(self):
@@ -95,18 +79,17 @@ class Test_check_bounds_contiguity_and_mask(tests.IrisTest):
         # discontiguities doesn't error.
         cube = sample_2d_latlons()
         make_bounds_discontiguous_at_point(cube, 3, 4)
-        _check_bounds_contiguity_and_mask(cube.coord('longitude'), cube.data)
+        _check_bounds_contiguity_and_mask(cube.coord("longitude"), cube.data)
 
     def test_2d_discontigous_unmasked(self):
         # Test a 2D coordinate which is discontiguous and unmasked at
         # discontiguities.
         cube = sample_2d_latlons()
         make_bounds_discontiguous_at_point(cube, 3, 4)
-        msg = 'coordinate are not contiguous'
+        msg = "coordinate are not contiguous"
         cube.data[3, 4] = ma.nomask
-        with self.assertRaisesRegexp(ValueError, msg):
-            _check_bounds_contiguity_and_mask(cube.coord('longitude'),
-                                              cube.data)
+        with self.assertRaisesRegex(ValueError, msg):
+            _check_bounds_contiguity_and_mask(cube.coord("longitude"), cube.data)
 
 
 if __name__ == "__main__":

@@ -1,27 +1,12 @@
-# (C) British Crown Copyright 2013 - 2016, Met Office
+# Copyright Iris contributors
 #
-# This file is part of Iris.
-#
-# Iris is free software: you can redistribute it and/or modify it under
-# the terms of the GNU Lesser General Public License as published by the
-# Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# Iris is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU Lesser General Public License for more details.
-#
-# You should have received a copy of the GNU Lesser General Public License
-# along with Iris.  If not, see <http://www.gnu.org/licenses/>.
+# This file is part of Iris and is released under the BSD license.
+# See LICENSE in the root of the repository for full licensing details.
 """Unit tests for :class:`iris.fileformat.ff.ArakawaC`."""
-
-from __future__ import (absolute_import, division, print_function)
-from six.moves import (filter, input, map, range, zip)  # noqa
 
 # Import iris.tests first so that some things can be initialised before
 # importing anything else.
-import iris.tests as tests
+import iris.tests as tests  # isort:skip
 
 import numpy as np
 
@@ -40,21 +25,28 @@ class Test__x_vectors(tests.IrisTest):
         self._test(column=None, horiz_grid_type=None, xp=None, xu=None)
 
     def test_1d(self):
-        self._test(column=np.array([[0], [1], [2], [3]]),
-                   horiz_grid_type=None,
-                   xp=np.array([0, 1, 2, 3]), xu=None)
+        self._test(
+            column=np.array([[0], [1], [2], [3]]),
+            horiz_grid_type=None,
+            xp=np.array([0, 1, 2, 3]),
+            xu=None,
+        )
 
     def test_2d_no_wrap(self):
-        self._test(column=np.array([[0, 0], [1, 10], [2, 20], [3, 30]]),
-                   horiz_grid_type=1,
-                   xp=np.array([0, 1, 2, 3]),
-                   xu=np.array([0, 10, 20, 30]))
+        self._test(
+            column=np.array([[0, 0], [1, 10], [2, 20], [3, 30]]),
+            horiz_grid_type=1,
+            xp=np.array([0, 1, 2, 3]),
+            xu=np.array([0, 10, 20, 30]),
+        )
 
     def test_2d_with_wrap(self):
-        self._test(column=np.array([[0, 0], [1, 10], [2, 20], [3, 30]]),
-                   horiz_grid_type=0,
-                   xp=np.array([0, 1, 2, 3]),
-                   xu=np.array([0, 10, 20]))
+        self._test(
+            column=np.array([[0, 0], [1, 10], [2, 20], [3, 30]]),
+            horiz_grid_type=0,
+            xp=np.array([0, 1, 2, 3]),
+            xu=np.array([0, 10, 20]),
+        )
 
 
 class Test_regular_x(tests.IrisTest):

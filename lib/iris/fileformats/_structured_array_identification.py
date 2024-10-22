@@ -1,22 +1,12 @@
-# (C) British Crown Copyright 2014 - 2015, Met Office
+# Copyright Iris contributors
 #
-# This file is part of Iris.
-#
-# Iris is free software: you can redistribute it and/or modify it under
-# the terms of the GNU Lesser General Public License as published by the
-# Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# Iris is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU Lesser General Public License for more details.
-#
-# You should have received a copy of the GNU Lesser General Public License
-# along with Iris.  If not, see <http://www.gnu.org/licenses/>.
-r"""
+# This file is part of Iris and is released under the BSD license.
+# See LICENSE in the root of the repository for full licensing details.
+r"""Identification of multi-dimensional structure in a flat sequence of homogeneous objects.
+
 The purpose of this module is to provide utilities for the identification
 of multi-dimensional structure in a flat sequence of homogeneous objects.
+
 One application of this is to efficiently identify a higher dimensional
 structure from a sorted sequence of PPField instances; for an example, given
 a list of 12 PPFields, identification that there are 3 unique "time" values
@@ -54,25 +44,18 @@ An example using numpy arrays:
 
 """
 
-from __future__ import (absolute_import, division, print_function)
-from six.moves import (filter, input, map, range, zip)  # noqa
-
 from collections import namedtuple
 
 import numpy as np
 
 
 class _UnstructuredArrayException(Exception):
-    """
-    Raised when an array has been incorrectly assumed to be
-    structured in a specific way.
-
-    """
+    """Raised when an array has been incorrectly assumed to be structured in a specific way."""
 
 
-class ArrayStructure(namedtuple('ArrayStructure',
-                                ['stride', 'unique_ordered_values'])):
-    """
+class ArrayStructure(namedtuple("ArrayStructure", ["stride", "unique_ordered_values"])):
+    """Represent the identified structure of an array.
+
     Represents the identified structure of an array, where stride is the
     step between each unique value being seen in order in the flattened
     version of the array.
@@ -102,16 +85,17 @@ class ArrayStructure(namedtuple('ArrayStructure',
     2
 
     """
+
     def __new__(cls, stride, unique_ordered_values):
-        self = super(ArrayStructure, cls).__new__(cls, stride,
-                                                  unique_ordered_values)
+        self = super().__new__(cls, stride, unique_ordered_values)
         return self
 
     __slots__ = ()
 
     @property
     def size(self):
-        """
+        """Number of unique values in the original array.
+
         The ``size`` attribute is the number of the unique values in the
         original array. It is **not** the length of the original array.
 
@@ -119,35 +103,35 @@ class ArrayStructure(namedtuple('ArrayStructure',
         return len(self.unique_ordered_values)
 
     def __hash__(self):
-        return super(ArrayStructure, self).__hash__()
+        return super().__hash__()
 
     def __eq__(self, other):
-        stride = getattr(other, 'stride', None)
-        arr = getattr(other, 'unique_ordered_values', None)
+        stride = getattr(other, "stride", None)
+        arr = getattr(other, "unique_ordered_values", None)
 
         result = NotImplemented
         if stride is not None or arr is not None:
-            result = (stride == self.stride and
-                      np.all(self.unique_ordered_values == arr))
+            result = stride == self.stride and np.all(self.unique_ordered_values == arr)
         return result
 
     def __ne__(self, other):
         return not (self == other)
 
     def construct_array(self, size):
-        """
+        """Build 1D array.
+
         The inverse operation of :func:`ArrayStructure.from_array`, returning
         a 1D array of the given length with the appropriate repetition
         pattern.
 
         """
-        return np.tile(np.repeat(self.unique_ordered_values, self.stride),
-                       size // (self.size * self.stride))
+        return np.tile(
+            np.repeat(self.unique_ordered_values, self.stride),
+            size // (self.size * self.stride),
+        )
 
-    def nd_array_and_dims(self, original_array, target_shape, order='c'):
-        """
-        Given a 1D array, and a target shape, construct an ndarray
-        and associated dimensions.
+    def nd_array_and_dims(self, original_array, target_shape, order="c"):
+        """Given a 1D array and a target shape, construct an ndarray and associated dimensions.
 
         Raises an _UnstructuredArrayException if no optimised shape array can
         be returned, in which case, simply reshaping the original_array would
@@ -170,8 +154,7 @@ class ArrayStructure(namedtuple('ArrayStructure',
 
         """
         if original_array.shape[0] != np.prod(target_shape):
-            raise ValueError('Original array and target shape do not '
-                             'match up.')
+            raise ValueError("Original array and target shape do not match up.")
         stride_product = 1
 
         result = None
@@ -182,8 +165,9 @@ class ArrayStructure(namedtuple('ArrayStructure',
             # and has no associated dimension.
             result = (np.array(original_array[0]), ())
 
-        for dim, length in sorted(enumerate(target_shape),
-                                  reverse=order.lower() == 'c'):
+        for dim, length in sorted(
+            enumerate(target_shape), reverse=order.lower() == "c"
+        ):
             if result is not None:
                 break
 
@@ -191,17 +175,19 @@ class ArrayStructure(namedtuple('ArrayStructure',
             # given shape? If so, reshape it back to the target shape,
             # then index out any dimensions which are constant.
             if self.stride == stride_product and length == self.size:
-                vector = original_array.reshape(target_shape + (-1, ),
-                                                order=order)
+                vector = original_array.reshape(target_shape + (-1,), order=order)
                 # Reduce the dimensionality to a 1d array by indexing
                 # everything but this dimension.
-                vector = vector[tuple(0 if dim != i else slice(None)
-                                      for i in range(len(target_shape)))]
+                vector = vector[
+                    tuple(
+                        0 if dim != i else slice(None) for i in range(len(target_shape))
+                    )
+                ]
                 # Remove any trailing dimension if it is trivial.
                 if len(vector.shape) != 1 and vector.shape[-1] == 1:
                     vector = vector[..., 0]
 
-                result = [vector, (dim, )]
+                result = [vector, (dim,)]
                 break
 
             stride_product *= length
@@ -209,14 +195,17 @@ class ArrayStructure(namedtuple('ArrayStructure',
         if result is not None:
             return result
         else:
-            msg = ('Unable to construct an efficient nd_array for the target '
-                   'shape. Consider reshaping the array to the full shape '
-                   'instead.')
+            msg = (
+                "Unable to construct an efficient nd_array for the target "
+                "shape. Consider reshaping the array to the full shape "
+                "instead."
+            )
             raise _UnstructuredArrayException(msg)
 
     @classmethod
     def from_array(cls, arr):
-        """
+        """Return the computed ArrayStructure for the given flat array.
+
         Return the computed ArrayStructure for the given flat array
         (if a structure exists, otherwise return None).
 
@@ -229,7 +218,7 @@ class ArrayStructure(namedtuple('ArrayStructure',
             arr = np.array(arr)
 
         if arr.ndim != 1:
-            raise ValueError('The given array must be 1D.')
+            raise ValueError("The given array must be 1D.")
 
         if arr.size == 0:
             return cls(1, arr)
@@ -301,17 +290,17 @@ class ArrayStructure(namedtuple('ArrayStructure',
         return structure
 
 
-class GroupStructure(object):
-    """
+class GroupStructure:
+    """Represent a collection of array structures.
+
     The GroupStructure class represents a collection of array structures along
     with additional information such as the length of the arrays and the array
     order in which they are found (row-major or column-major).
 
     """
-    def __init__(self, length, component_structure, array_order='c'):
-        """
-        group_component_to_array - a dictionary. See also TODO
-        """
+
+    def __init__(self, length, component_structure, array_order="c"):
+        """Group_component_to_array - a dictionary. See also TODO."""
         #: The size common to all of the original arrays and used to determine
         #: possible shape configurations.
         self.length = length
@@ -321,35 +310,39 @@ class GroupStructure(object):
         self._cmpt_structure = component_structure
 
         array_order = array_order.lower()
-        if array_order not in ['c', 'f']:
-            raise ValueError('Invalid array order {!r}'.format(array_order))
+        if array_order not in ["c", "f"]:
+            raise ValueError("Invalid array order {!r}".format(array_order))
         self._array_order = array_order
 
     @classmethod
-    def from_component_arrays(cls, component_arrays, array_order='c'):
-        """
+    def from_component_arrays(cls, component_arrays, array_order="c"):
+        """From component arrays.
+
         Given a dictionary of component name to flattened numpy array,
         return an :class:`GroupStructure` instance which is representative
         of the underlying array structures.
 
-        Args:
-
-         * component_arrays - A dictionary mapping component name to the
-                              full sized 1d (flattened) numpy array.
+        Parameters
+        ----------
+        component_arrays :
+            A dictionary mapping component name to the full sized 1d (flattened)
+            numpy array.
 
         """
-        cmpt_structure = {name: ArrayStructure.from_array(array)
-                          for name, array in component_arrays.items()}
+        cmpt_structure = {
+            name: ArrayStructure.from_array(array)
+            for name, array in component_arrays.items()
+        }
 
         sizes = np.array([array.size for array in component_arrays.values()])
         if not np.all(sizes == sizes[0]):
-            raise ValueError('All array elements must have the same size.')
+            raise ValueError("All array elements must have the same size.")
 
         return cls(sizes[0], cmpt_structure, array_order=array_order)
 
     def _potentially_flattened_components(self):
-        """
-        Return a generator of the components which could form non-trivial
+        """Return a generator of the components which could form non-trivial.
+
         (i.e. ``length > 1``) array dimensions.
 
         """
@@ -359,12 +352,10 @@ class GroupStructure(object):
 
     @property
     def is_row_major(self):
-        return self._array_order == 'c'
+        return self._array_order == "c"
 
     def possible_structures(self):
-        """
-        Return a tuple containing the possible structures that this group
-        could have.
+        """Return a tuple containing the possible structures that this group could have.
 
         A structure in this case is an iterable of
         ``(name, ArrayStructure)`` pairs, one per dimension, of a possible
@@ -380,8 +371,11 @@ class GroupStructure(object):
         vector_structures = sorted(self._potentially_flattened_components())
 
         def filter_strides_of_length(length):
-            return [(name, struct) for (name, struct) in vector_structures
-                    if struct.stride == length]
+            return [
+                (name, struct)
+                for (name, struct) in vector_structures
+                if struct.stride == length
+            ]
 
         # Keep track of our structures so far. This will be a list of lists
         # containing the actual structure pairs.
@@ -412,8 +406,7 @@ class GroupStructure(object):
                 # If we are to build another dimension on top of this possible
                 # structure, we need to compute the stride that would be
                 # needed for that dimension.
-                next_stride = np.product([struct.size
-                                          for (_, struct) in potential])
+                next_stride = np.prod([struct.size for (_, struct) in potential])
 
                 # If we've found a structure whose product is the length of
                 # the fields of this Group, we've got a valid potential.
@@ -444,22 +437,26 @@ class GroupStructure(object):
         return tuple(allowed_structures)
 
     def __str__(self):
-        result = ['Group structure:',
-                  '  Length: {}'.format(self.length),
-                  '  Element names: {}'.format(
-                      ', '.join(sorted(self._cmpt_structure.keys()))),
-                  '  Possible structures ("{}" order):'.format(
-                      self._array_order)]
+        result = [
+            "Group structure:",
+            "  Length: {}".format(self.length),
+            "  Element names: {}".format(
+                ", ".join(sorted(self._cmpt_structure.keys()))
+            ),
+            '  Possible structures ("{}" order):'.format(self._array_order),
+        ]
 
         for structure in self.possible_structures():
-            sizes = ('{}: {}'.format(name, arr_struct.size)
-                     for name, arr_struct in structure)
-            result.append('    ({})'.format('; '.join(sizes)))
+            sizes = (
+                "{}: {}".format(name, arr_struct.size) for name, arr_struct in structure
+            )
+            result.append("    ({})".format("; ".join(sizes)))
 
-        return '\n'.join(result)
+        return "\n".join(result)
 
     def build_arrays(self, shape, elements_arrays):
-        """
+        """Build Arrays.
+
         Given the target shape, and a dictionary mapping name to 1D array of
         :attr:`.length`, return a dictionary mapping element name to
         ``(ndarray, dims)``.
@@ -473,8 +470,10 @@ class GroupStructure(object):
         elem_to_nd_and_dims = {}
 
         if sorted(elements_arrays.keys()) != sorted(self._cmpt_structure):
-            raise ValueError('The GroupStructure elements were not the same '
-                             'as those provided in the element_arrays.')
+            raise ValueError(
+                "The GroupStructure elements were not the same "
+                "as those provided in the element_arrays."
+            )
 
         for name, array in elements_arrays.items():
             struct = self._cmpt_structure[name]
@@ -482,16 +481,18 @@ class GroupStructure(object):
             if struct is not None:
                 try:
                     nd_array_and_dims = struct.nd_array_and_dims(
-                        array, shape, order=self._array_order)
+                        array, shape, order=self._array_order
+                    )
                 except _UnstructuredArrayException:
                     pass
 
             if nd_array_and_dims is None:
                 reshape_shape = shape
                 if array.ndim > 1:
-                    reshape_shape = reshape_shape + (-1, )
-                nd_array_and_dims = [array.reshape(reshape_shape,
-                                                   order=self._array_order),
-                                     tuple(range(len(shape)))]
+                    reshape_shape = reshape_shape + (-1,)
+                nd_array_and_dims = [
+                    array.reshape(reshape_shape, order=self._array_order),
+                    tuple(range(len(shape))),
+                ]
             elem_to_nd_and_dims[name] = nd_array_and_dims
         return elem_to_nd_and_dims

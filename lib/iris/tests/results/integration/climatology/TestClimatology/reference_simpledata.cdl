@@ -13,15 +13,15 @@ variables:
 		time:climatology = "time_climatology" ;
 		time:units = "days since 1970-01-01 00:00:00-00" ;
 		time:standard_name = "time" ;
-		time:calendar = "gregorian" ;
+		time:calendar = "standard" ;
 	double time_climatology(time, bnds) ;
 	double latitude(latitude) ;
 		latitude:axis = "Y" ;
-		latitude:units = "1" ;
+		latitude:units = "degrees_north" ;
 		latitude:standard_name = "latitude" ;
 	double longitude(longitude) ;
 		longitude:axis = "X" ;
-		longitude:units = "1" ;
+		longitude:units = "degrees_east" ;
 		longitude:standard_name = "longitude" ;
 
 // global attributes:

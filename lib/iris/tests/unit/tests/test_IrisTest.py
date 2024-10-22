@@ -1,40 +1,25 @@
-# (C) British Crown Copyright 2014 - 2017, Met Office
+# Copyright Iris contributors
 #
-# This file is part of Iris.
-#
-# Iris is free software: you can redistribute it and/or modify it under
-# the terms of the GNU Lesser General Public License as published by the
-# Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# Iris is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU Lesser General Public License for more details.
-#
-# You should have received a copy of the GNU Lesser General Public License
-# along with Iris.  If not, see <http://www.gnu.org/licenses/>.
+# This file is part of Iris and is released under the BSD license.
+# See LICENSE in the root of the repository for full licensing details.
 """Unit tests for the :mod:`iris.tests.IrisTest` class."""
-
-from __future__ import (absolute_import, division, print_function)
-from six.moves import (filter, input, map, range, zip)  # noqa
-import six
 
 # import iris tests first so that some things can be initialised before
 # importing anything else
-import iris.tests as tests
+import iris.tests as tests  # isort:skip
 
-from abc import ABCMeta, abstractproperty
+from abc import ABCMeta, abstractmethod
 
 import numpy as np
 
 
-class _MaskedArrayEquality(six.with_metaclass(ABCMeta, object)):
+class _MaskedArrayEquality(metaclass=ABCMeta):
     def setUp(self):
         self.arr1 = np.ma.array([1, 2, 3, 4], mask=[False, True, True, False])
         self.arr2 = np.ma.array([1, 3, 2, 4], mask=[False, True, True, False])
 
-    @abstractproperty
+    @property
+    @abstractmethod
     def _func(self):
         pass
 
@@ -80,9 +65,7 @@ class _MaskedArrayEquality(six.with_metaclass(ABCMeta, object)):
             self._func(self.arr1, arr2, strict=False)
 
 
-@tests.iristest_timing_decorator
-class Test_assertMaskedArrayEqual(_MaskedArrayEquality,
-                                  tests.IrisTest_nometa):
+class Test_assertMaskedArrayEqual(_MaskedArrayEquality, tests.IrisTest):
     @property
     def _func(self):
         return self.assertMaskedArrayEqual
@@ -104,7 +87,7 @@ class Test_assertMaskedArrayEqual__Nonmaasked(tests.IrisTest):
     def test_masked_nonmasked_different(self):
         arr1 = np.ma.masked_array([1, 2])
         arr2 = np.array([1, 3])
-        with self.assertRaisesRegexp(AssertionError, 'Arrays are not equal'):
+        with self.assertRaisesRegex(AssertionError, "Arrays are not equal"):
             self.assertMaskedArrayEqual(arr1, arr2)
 
     def test_nonmasked_masked_same(self):
@@ -129,9 +112,7 @@ class Test_assertMaskedArrayEqual__Nonmaasked(tests.IrisTest):
         self.assertMaskedArrayEqual(arr1, arr2)
 
 
-@tests.iristest_timing_decorator
-class Test_assertMaskedArrayAlmostEqual(_MaskedArrayEquality,
-                                        tests.IrisTest_nometa):
+class Test_assertMaskedArrayAlmostEqual(_MaskedArrayEquality, tests.IrisTest):
     @property
     def _func(self):
         return self.assertMaskedArrayAlmostEqual
@@ -143,5 +124,5 @@ class Test_assertMaskedArrayAlmostEqual(_MaskedArrayEquality,
             self.assertMaskedArrayAlmostEqual(arr1, arr2, decimal=3)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     tests.main()

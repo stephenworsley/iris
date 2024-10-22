@@ -1,27 +1,12 @@
-# (C) British Crown Copyright 2016 - 2017, Met Office
+# Copyright Iris contributors
 #
-# This file is part of Iris.
-#
-# Iris is free software: you can redistribute it and/or modify it under
-# the terms of the GNU Lesser General Public License as published by the
-# Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# Iris is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU Lesser General Public License for more details.
-#
-# You should have received a copy of the GNU Lesser General Public License
-# along with Iris.  If not, see <http://www.gnu.org/licenses/>.
+# This file is part of Iris and is released under the BSD license.
+# See LICENSE in the root of the repository for full licensing details.
 """Unit tests for the `iris.cube.Cube` class operators."""
-
-from __future__ import (absolute_import, division, print_function)
-from six.moves import (filter, input, map, range, zip)  # noqa
 
 # import iris tests first so that some things can be initialised
 # before importing anything else.
-import iris.tests as tests
+import iris.tests as tests  # isort:skip
 
 import operator
 
@@ -39,9 +24,9 @@ class Test_lazy_maths(tests.IrisTest):
         data = np.arange(len(points) * nx, dtype=dtype) + 1  # Just avoid 0.
         data = data.reshape(len(points), nx)
         data = as_lazy_data(data)
-        cube = iris.cube.Cube(data, standard_name='air_temperature', units='K')
-        lat = DimCoord(points, 'latitude', bounds=bounds)
-        lon = DimCoord(np.arange(nx), 'longitude')
+        cube = iris.cube.Cube(data, standard_name="air_temperature", units="K")
+        lat = DimCoord(points, "latitude", bounds=bounds)
+        lon = DimCoord(np.arange(nx), "longitude")
         cube.add_dim_coord(lat, 0)
         cube.add_dim_coord(lon, 1)
         return cube
@@ -157,7 +142,7 @@ class Test_lazy_maths(tests.IrisTest):
 class Test_lazy_maths__scalar_cube(tests.IrisTest):
     def build_lazy_cube(self, value, dtype=np.float64):
         data = as_lazy_data(np.array(value, dtype=dtype))
-        return iris.cube.Cube(data, standard_name='air_temperature', units='K')
+        return iris.cube.Cube(data, standard_name="air_temperature", units="K")
 
     def setUp(self):
         self.c1 = self.build_lazy_cube(3)
@@ -238,13 +223,13 @@ class Test_lazy_maths__scalar_cube(tests.IrisTest):
 
 class Test_lazy_maths__masked_data(tests.IrisTest):
     def build_lazy_cube(self, dtype=np.float64):
-        data = ma.array([[1., 1.], [1., 100000.]],
-                        mask=[[0, 0], [0, 1]],
-                        dtype=dtype)
+        data = ma.array(
+            [[1.0, 1.0], [1.0, 100000.0]], mask=[[0, 0], [0, 1]], dtype=dtype
+        )
         data = as_lazy_data(data)
-        cube = iris.cube.Cube(data, standard_name='air_temperature', units='K')
-        lat = DimCoord([-10, 10], 'latitude')
-        lon = DimCoord([10, 20], 'longitude')
+        cube = iris.cube.Cube(data, standard_name="air_temperature", units="K")
+        lat = DimCoord([-10, 10], "latitude")
+        lon = DimCoord([10, 20], "longitude")
         cube.add_dim_coord(lat, 0)
         cube.add_dim_coord(lon, 1)
         return cube

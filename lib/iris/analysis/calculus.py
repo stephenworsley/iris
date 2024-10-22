@@ -1,29 +1,12 @@
-# (C) British Crown Copyright 2010 - 2019, Met Office
+# Copyright Iris contributors
 #
-# This file is part of Iris.
-#
-# Iris is free software: you can redistribute it and/or modify it under
-# the terms of the GNU Lesser General Public License as published by the
-# Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# Iris is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU Lesser General Public License for more details.
-#
-# You should have received a copy of the GNU Lesser General Public License
-# along with Iris.  If not, see <http://www.gnu.org/licenses/>.
-"""
-Calculus operations on :class:`iris.cube.Cube` instances.
+# This file is part of Iris and is released under the BSD license.
+# See LICENSE in the root of the repository for full licensing details.
+"""Calculus operations on :class:`iris.cube.Cube` instances.
 
 See also: :mod:`NumPy <numpy>`.
 
 """
-
-from __future__ import (absolute_import, division, print_function)
-from six.moves import (filter, input, map, range, zip)  # noqa
-import six
 
 import re
 import warnings
@@ -31,21 +14,23 @@ import warnings
 import cf_units
 import numpy as np
 
-import iris.cube
-import iris.coords
-import iris.coord_systems
 import iris.analysis
+from iris.analysis.cartography import (
+    DEFAULT_SPHERICAL_EARTH_RADIUS,
+    DEFAULT_SPHERICAL_EARTH_RADIUS_UNIT,
+)
 import iris.analysis.maths
-from iris.analysis.cartography import (DEFAULT_SPHERICAL_EARTH_RADIUS,
-                                       DEFAULT_SPHERICAL_EARTH_RADIUS_UNIT)
+import iris.coord_systems
+import iris.coords
 from iris.util import delta
+from iris.warnings import IrisUserWarning
 
-
-__all__ = ['cube_delta', 'differentiate', 'curl']
+__all__ = ["DIRECTIONAL_NAMES", "cube_delta", "curl", "differentiate"]
 
 
 def _construct_delta_coord(coord):
-    """
+    """Return a coordinate of deltas between the given coordinate's points.
+
     Return a coordinate of deltas between the given coordinate's points.
     If the original coordinate has length n and is circular then the
     result will be a coordinate of length n, otherwise the result will be
@@ -54,10 +39,11 @@ def _construct_delta_coord(coord):
     """
     if coord.ndim != 1:
         raise iris.exceptions.CoordinateMultiDimError(coord)
-    circular = getattr(coord, 'circular', False)
+    circular = getattr(coord, "circular", False)
     if coord.shape == (1,) and not circular:
-        raise ValueError('Cannot take interval differences of a single '
-                         'valued coordinate.')
+        raise ValueError(
+            "Cannot take interval differences of a single valued coordinate."
+        )
 
     if circular:
         circular_kwd = coord.units.modulus or True
@@ -71,36 +57,43 @@ def _construct_delta_coord(coord):
 
     points = iris.util.delta(coord.points, 0, circular=circular_kwd)
     new_coord = iris.coords.AuxCoord.from_coord(coord).copy(points, bounds)
-    new_coord.rename('change_in_%s' % new_coord.name())
+    new_coord.rename("change_in_%s" % new_coord.name())
 
     return new_coord
 
 
 def _construct_midpoint_coord(coord, circular=None):
-    """
+    """Return a coordinate of mid-points from the given coordinate.
+
     Return a coordinate of mid-points from the given coordinate. If the
     given coordinate has length n and the circular flag set then the
     result will be a coordinate of length n, otherwise the result will be
     of length n-1.
 
     """
-    if circular and not hasattr(coord, 'circular'):
-        msg = ("Cannot produce a circular midpoint for the '{}' coord, "
-               "which does not have a 'circular' attribute.")
+    if circular and not hasattr(coord, "circular"):
+        msg = (
+            "Cannot produce a circular midpoint for the '{}' coord, "
+            "which does not have a 'circular' attribute."
+        )
         raise ValueError(msg.format(coord.name()))
 
     if circular is None:
-        circular = getattr(coord, 'circular', False)
-    elif circular != getattr(coord, 'circular', False):
-        msg = ("Construction coordinate midpoints for the '{}' coordinate, "
-               "though it has the attribute 'circular'={}.")
-        warnings.warn(msg.format(circular, coord.circular, coord.name()))
+        circular = getattr(coord, "circular", False)
+    elif circular != getattr(coord, "circular", False):
+        msg = (
+            "Construction coordinate midpoints for the '{}' coordinate, "
+            "though it has the attribute 'circular'={}."
+        )
+        warnings.warn(
+            msg.format(circular, coord.circular, coord.name()),
+            category=IrisUserWarning,
+        )
 
     if coord.ndim != 1:
         raise iris.exceptions.CoordinateMultiDimError(coord)
     if coord.shape == (1,) and not circular:
-        raise ValueError('Cannot take the midpoints of a single valued '
-                         'coordinate.')
+        raise ValueError("Cannot take the midpoints of a single valued coordinate.")
 
     # Calculate the delta of the coordinate
     # (this deals with circularity nicely).
@@ -124,38 +117,44 @@ def _construct_midpoint_coord(coord, circular=None):
     # Try creating a coordinate of the same type as before, otherwise,
     # make an AuxCoord.
     try:
-        mid_point_coord = coord.from_coord(coord).copy(mid_point_points,
-                                                       mid_point_bounds)
+        mid_point_coord = coord.from_coord(coord).copy(
+            mid_point_points, mid_point_bounds
+        )
     except ValueError:
         mid_point_coord = iris.coords.AuxCoord.from_coord(coord).copy(
-            mid_point_points, mid_point_bounds)
+            mid_point_points, mid_point_bounds
+        )
 
     return mid_point_coord
 
 
 def cube_delta(cube, coord):
-    """
-    Given a cube calculate the difference between each value in the
-    given coord's direction.
+    """Given a cube calculate the difference between each value in the coord's direction.
 
-
-    Args:
-
-    * coord
-        either a Coord instance or the unique name of a coordinate in the cube.
+    Parameters
+    ----------
+    coord :
+        Either a Coord instance or the unique name of a coordinate in the cube.
         If a Coord instance is provided, it does not necessarily have to
         exist in the cube.
 
-    Example usage::
+    Examples
+    --------
+    ::
 
-        change_in_temperature_wrt_pressure = \
-cube_delta(temperature_cube, 'pressure')
+        change_in_temperature_wrt_pressure = cube_delta(temperature_cube, 'pressure')
 
+    Notes
+    -----
     .. note:: Missing data support not yet implemented.
+
+    .. note::
+            This function does not maintain laziness when called; it realises data.
+            See more at :doc:`/userguide/real_and_lazy_data`.
 
     """
     # handle the case where a user passes a coordinate name
-    if isinstance(coord, six.string_types):
+    if isinstance(coord, str):
         coord = cube.coord(coord)
 
     if coord.ndim != 1:
@@ -163,19 +162,24 @@ cube_delta(temperature_cube, 'pressure')
 
     # Try and get a coord dim
     delta_dims = cube.coord_dims(coord.name())
-    if ((coord.shape[0] == 1 and not getattr(coord, 'circular', False)) or
-            not delta_dims):
-        raise ValueError('Cannot calculate delta over {!r} as it has '
-                         'length of 1.'.format(coord.name()))
+    if (
+        coord.shape[0] == 1 and not getattr(coord, "circular", False)
+    ) or not delta_dims:
+        raise ValueError(
+            "Cannot calculate delta over {!r} as it has length of 1.".format(
+                coord.name()
+            )
+        )
     delta_dim = delta_dims[0]
 
     # Calculate the actual delta, taking into account whether the given
     # coordinate is circular.
-    delta_cube_data = delta(cube.data, delta_dim,
-                            circular=getattr(coord, 'circular', False))
+    delta_cube_data = delta(
+        cube.data, delta_dim, circular=getattr(coord, "circular", False)
+    )
 
     # If the coord/dim is circular there is no change in cube shape
-    if getattr(coord, 'circular', False):
+    if getattr(coord, "circular", False):
         delta_cube = cube.copy(data=delta_cube_data)
     else:
         # Subset the cube to the appropriate new shape by knocking off
@@ -188,29 +192,34 @@ cube_delta(temperature_cube, 'pressure')
     # Replace the delta_dim coords with midpoints
     # (no shape change if circular).
     for cube_coord in cube.coords(dimensions=delta_dim):
-        delta_cube.replace_coord(_construct_midpoint_coord(
-            cube_coord, circular=getattr(coord, 'circular', False)))
+        delta_cube.replace_coord(
+            _construct_midpoint_coord(
+                cube_coord, circular=getattr(coord, "circular", False)
+            )
+        )
 
-    delta_cube.rename('change_in_{}_wrt_{}'.format(delta_cube.name(),
-                                                   coord.name()))
+    delta_cube.rename("change_in_{}_wrt_{}".format(delta_cube.name(), coord.name()))
 
     return delta_cube
 
 
 def differentiate(cube, coord_to_differentiate):
-    r"""
+    r"""Calculate the differential of a given cube.
+
     Calculate the differential of a given cube with respect to the
     coord_to_differentiate.
 
-    Args:
-
-    * coord_to_differentiate:
+    Parameters
+    ----------
+    coord_to_differentiate :
         Either a Coord instance or the unique name of a coordinate which
         exists in the cube.
         If a Coord instance is provided, it does not necessarily have to
         exist on the cube.
 
-    Example usage::
+    Examples
+    --------
+    ::
 
         u_wind_acceleration = differentiate(u_wind_cube, 'forecast_time')
 
@@ -244,17 +253,22 @@ def differentiate(cube, coord_to_differentiate):
     where `c` and `b` represent the input coordinate values and bounds,
     and `C` and `B` the output coordinate values and bounds.
 
-    .. note:: Difference method used is the same as :func:`cube_delta`
+    .. note::
+        Difference method used is the same as :func:`cube_delta`
         and therefore has the same limitations.
 
     .. note:: Spherical differentiation does not occur in this routine.
+
+    .. note::
+            This function does not maintain laziness when called; it realises data.
+            See more at :doc:`/userguide/real_and_lazy_data`.
 
     """
     # Get the delta cube in the required differential direction.
     # This operation results in a copy of the original cube.
     delta_cube = cube_delta(cube, coord_to_differentiate)
 
-    if isinstance(coord_to_differentiate, six.string_types):
+    if isinstance(coord_to_differentiate, str):
         coord = cube.coord(coord_to_differentiate)
     else:
         coord = coord_to_differentiate
@@ -266,22 +280,24 @@ def differentiate(cube, coord_to_differentiate):
     delta_cube = iris.analysis.maths.divide(delta_cube, delta_coord, delta_dim)
 
     # Update the standard name
-    delta_cube.rename('derivative_of_{}_wrt_{}'.format(cube.name(),
-                                                       coord.name()))
+    delta_cube.rename("derivative_of_{}_wrt_{}".format(cube.name(), coord.name()))
     return delta_cube
 
 
 def _curl_subtract(a, b):
-    """
+    """Straight forward wrapper to :func:`iris.analysis.maths.subtract`.
+
     Simple wrapper to :func:`iris.analysis.maths.subtract` to subtract
     two cubes, which deals with None in a way that makes sense in the
     context of curl.
 
     """
+    from iris.cube import Cube
+
     # We are definitely dealing with cubes or None - otherwise we have a
     # programmer error...
-    assert isinstance(a, iris.cube.Cube) or a is None
-    assert isinstance(b, iris.cube.Cube) or b is None
+    assert isinstance(a, Cube) or a is None
+    assert isinstance(b, Cube) or b is None
 
     if a is None and b is None:
         return None
@@ -295,14 +311,17 @@ def _curl_subtract(a, b):
 
 
 def _curl_differentiate(cube, coord):
-    """
+    """Straight forward wrapper to :func:`differentiate`.
+
     Simple wrapper to :func:`differentiate` to differentiate a cube and
     deal with None in a way that makes sense in the context of curl.
 
     """
+    from iris.cube import Cube
+
     # We are definitely dealing with cubes/coords or None - otherwise we
     # have a programmer error...
-    assert isinstance(cube, iris.cube.Cube) or cube is None
+    assert isinstance(cube, Cube) or cube is None
     assert isinstance(coord, iris.coords.Coord) or coord is None
 
     if cube is None:
@@ -316,15 +335,18 @@ def _curl_differentiate(cube, coord):
 
 
 def _curl_regrid(cube, prototype):
-    """
+    """Straight forward wrapper to :ref`iris.cube.Cube.regridded`.
+
     Simple wrapper to :ref`iris.cube.Cube.regridded` to deal with None
     in a way that makes sense in the context of curl.
 
     """
+    from iris.cube import Cube
+
     # We are definitely dealing with cubes or None - otherwise we have a
     # programmer error...
-    assert isinstance(cube, iris.cube.Cube) or cube is None
-    assert isinstance(prototype, iris.cube.Cube)
+    assert isinstance(cube, Cube) or cube is None
+    assert isinstance(prototype, Cube)
 
     if cube is None:
         result = None
@@ -334,17 +356,20 @@ def _curl_regrid(cube, prototype):
 
 
 def _copy_cube_transformed(src_cube, data, coord_func):
-    """
+    """Return a new cube with the given data with the coordinates transformed.
+
     Returns a new cube based on the src_cube, but with the given data,
     and with the coordinates transformed via coord_func.
 
     The data must have the same number of dimensions as the source cube.
 
     """
+    from iris.cube import Cube
+
     assert src_cube.ndim == data.ndim
 
     # Start with just the metadata and the data...
-    new_cube = iris.cube.Cube(data)
+    new_cube = Cube(data)
     new_cube.metadata = src_cube.metadata
     new_cube.metadata = src_cube.metadata
 
@@ -393,81 +418,83 @@ def _curl_change_z(src_cube, z_coord, prototype_diff):
 
 
 def _coord_sin(coord):
-    """
-    Return a coordinate which represents sin(coord).
+    """Return a coordinate which represents sin(coord).
 
-    Args:
-
-    * coord
-        Coord instance with values in either degrees or radians
+    Parameters
+    ----------
+    coord :
+        Coord instance with values in either degrees or radians.
 
     """
     return _trig_method(coord, np.sin)
 
 
 def _coord_cos(coord):
-    """
-    Return a coordinate which represents cos(coord).
+    """Return a coordinate which represents cos(coord).
 
-    Args:
-
-    * coord
-        Coord instance with values in either degrees or radians
+    Parameters
+    ----------
+    coord :
+        Coord instance with values in either degrees or radians.
 
     """
     return _trig_method(coord, np.cos)
 
 
 def _trig_method(coord, trig_function):
-    """
-    Return a coordinate which represents trig_function(coord).
+    """Return a coordinate which represents trig_function(coord).
 
-    Args:
-
-    * coord
-        Coord instance with points values in either degrees or radians
-    * trig_function
-        Reference to a trigonometric function e.g. numpy.sin
+    Parameters
+    ----------
+    coord :
+        Coord instance with points values in either degrees or radians.
+    trig_function :
+        Reference to a trigonometric function e.g. numpy.sin.
 
     """
     # If we are in degrees create a copy that is in radians.
-    if coord.units == 'degrees':
+    if coord.units == "degrees":
         coord = coord.copy()
-        coord.convert_units('radians')
+        coord.convert_units("radians")
 
     trig_coord = iris.coords.AuxCoord.from_coord(coord)
     trig_coord.points = trig_function(coord.points)
     if coord.has_bounds():
         trig_coord.bounds = trig_function(coord.bounds)
-    trig_coord.units = '1'
-    trig_coord.rename('{}({})'.format(trig_function.__name__, coord.name()))
+    trig_coord.units = "1"
+    trig_coord.rename("{}({})".format(trig_function.__name__, coord.name()))
 
     return trig_coord
 
 
 def curl(i_cube, j_cube, k_cube=None):
-    r"""
+    r"""Calculate the 2 or 3-dimensional spherical or cartesian curl.
+
     Calculate the 2-dimensional or 3-dimensional spherical or cartesian
     curl of the given vector of cubes.
+
+    The cube standard names must match one of the combinations in
+    :data:`DIRECTIONAL_NAMES`.
 
     As well as the standard x and y coordinates, this function requires each
     cube to possess a vertical or z-like coordinate (representing some form
     of height or pressure).  This can be a scalar or dimension coordinate.
 
-    Args:
+    Parameters
+    ----------
+    i_cube :
+        The i cube of the vector to operate on.
+    j_cube :
+        The j cube of the vector to operate on.
+    k_cube : optional
+        The k cube of the vector to operate on.
 
-    * i_cube
-        The i cube of the vector to operate on
-    * j_cube
-        The j cube of the vector to operate on
+    Returns
+    -------
+    List of cubes i_cmpt_curl_cube, j_cmpt_curl_cube, k_cmpt_curl_cube
 
-    Kwargs:
-
-    * k_cube
-        The k cube of the vector to operate on
-
-    Return (i_cmpt_curl_cube, j_cmpt_curl_cube, k_cmpt_curl_cube)
-
+    Notes
+    -----
     If the k-cube is not passed in then the 2-dimensional curl will
     be calculated, yielding the result: [None, None, k_cube].
     If the k-cube is passed in, the 3-dimensional curl will
@@ -482,88 +509,92 @@ def curl(i_cube, j_cube, k_cube=None):
     GeogCS or RotatedGeogCS, the spherical curl will be calculated; otherwise
     the cartesian curl will be calculated:
 
-        Cartesian curl
+    * Cartesian curl
+        * When cartesian calculus is used, i_cube is the u component,
+          j_cube is the v component and k_cube is the w component.
 
-            When cartesian calculus is used, i_cube is the u component,
-            j_cube is the v component and k_cube is the w component.
+          The Cartesian curl is defined as:
 
-            The Cartesian curl is defined as:
+          .. math::
 
-            .. math::
+              \nabla\times \vec u =
+              (\frac{\delta w}{\delta y} - \frac{\delta v}{\delta z})\vec a_i
+              -
+              (\frac{\delta w}{\delta x} - \frac{\delta u}{\delta z})\vec a_j
+              +
+              (\frac{\delta v}{\delta x} - \frac{\delta u}{\delta y})\vec a_k
 
-                \nabla\times \vec u =
-                (\frac{\delta w}{\delta y} - \frac{\delta v}{\delta z})\vec a_i
-                -
-                (\frac{\delta w}{\delta x} - \frac{\delta u}{\delta z})\vec a_j
-                +
-                (\frac{\delta v}{\delta x} - \frac{\delta u}{\delta y})\vec a_k
+    * Spherical curl
+        * When spherical calculus is used, i_cube is the :math:`\phi` vector
+          component (e.g. eastward), j_cube is the :math:`\theta` component
+          (e.g. northward) and k_cube is the radial component.
 
-        Spherical curl
+          The spherical curl is defined as:
 
-            When spherical calculus is used, i_cube is the :math:`\phi` vector
-            component (e.g. eastward), j_cube is the :math:`\theta` component
-            (e.g. northward) and k_cube is the radial component.
+          .. math::
 
-            The spherical curl is defined as:
+              \nabla\times \vec A = \frac{1}{r cos \theta}
+              (\frac{\delta}{\delta \theta}
+              (\vec A_\phi cos \theta) -
+              \frac{\delta \vec A_\theta}{\delta \phi}) \vec r +
+              \frac{1}{r}(\frac{1}{cos \theta}
+              \frac{\delta \vec A_r}{\delta \phi} -
+              \frac{\delta}{\delta r} (r \vec A_\phi))\vec \theta +
+              \frac{1}{r}
+              (\frac{\delta}{\delta r}(r \vec A_\theta) -
+              \frac{\delta \vec A_r}{\delta \theta}) \vec \phi
 
-            .. math::
+          where phi is longitude, theta is latitude.
 
-                \nabla\times \vec A = \frac{1}{r cos \theta}
-                (\frac{\delta}{\delta \theta}
-                (\vec A_\phi cos \theta) -
-                \frac{\delta \vec A_\theta}{\delta \phi}) \vec r +
-                \frac{1}{r}(\frac{1}{cos \theta}
-                \frac{\delta \vec A_r}{\delta \phi} -
-                \frac{\delta}{\delta r} (r \vec A_\phi))\vec \theta +
-                \frac{1}{r}
-                (\frac{\delta}{\delta r}(r \vec A_\theta) -
-                \frac{\delta \vec A_r}{\delta \theta}) \vec \phi
+    .. note::
 
-            where phi is longitude, theta is latitude.
+            This function does not maintain laziness when called; it realises data.
+            See more at :doc:`/userguide/real_and_lazy_data`.
 
     """
     # Get the vector quantity names.
     # (i.e. ['easterly', 'northerly', 'vertical'])
-    vector_quantity_names, phenomenon_name = \
-        spatial_vectors_with_phenom_name(i_cube, j_cube, k_cube)
+    vector_quantity_names, phenomenon_name = spatial_vectors_with_phenom_name(
+        i_cube, j_cube, k_cube
+    )
 
     cubes = filter(None, [i_cube, j_cube, k_cube])
 
     # get the names of all coords binned into useful comparison groups
-    coord_comparison = iris.analysis.coord_comparison(*cubes)
+    coord_comparison = iris.analysis._dimensional_metadata_comparison(*cubes)
 
-    bad_coords = coord_comparison['ungroupable_and_dimensioned']
+    bad_coords = coord_comparison["ungroupable_and_dimensioned"]
     if bad_coords:
-        raise ValueError("Coordinates found in one cube that describe "
-                         "a data dimension which weren't in the other "
-                         "cube ({}), try removing this coordinate.".format(
-                             ', '.join(group.name() for group in bad_coords)))
+        raise ValueError(
+            "Coordinates found in one cube that describe "
+            "a data dimension which weren't in the other "
+            "cube ({}), try removing this coordinate.".format(
+                ", ".join(group.name() for group in bad_coords)
+            )
+        )
 
-    bad_coords = coord_comparison['resamplable']
+    bad_coords = coord_comparison["resamplable"]
     if bad_coords:
-        raise ValueError('Some coordinates are different ({}), consider '
-                         'resampling.'.format(
-                             ', '.join(group.name() for group in bad_coords)))
-
-    ignore_string = ''
-    if coord_comparison['ignorable']:
-        ignore_string = ' (ignoring {})'.format(
-            ', '.join(group.name() for group in bad_coords))
+        raise ValueError(
+            "Some coordinates are different ({}), consider resampling.".format(
+                ", ".join(group.name() for group in bad_coords)
+            )
+        )
 
     # Get the dim_coord, or None if none exist, for the xyz dimensions
-    x_coord = i_cube.coord(axis='X')
-    y_coord = i_cube.coord(axis='Y')
-    z_coord = i_cube.coord(axis='Z')
+    x_coord = i_cube.coord(axis="X")
+    y_coord = i_cube.coord(axis="Y")
+    z_coord = i_cube.coord(axis="Z")
 
     y_dim = i_cube.coord_dims(y_coord)[0]
 
-    horiz_cs = i_cube.coord_system('CoordSystem')
+    horiz_cs = i_cube.coord_system("CoordSystem")
 
     # Non-spherical coords?
-    spherical_coords = isinstance(horiz_cs, (iris.coord_systems.GeogCS,
-                                  iris.coord_systems.RotatedGeogCS))
+    spherical_coords = isinstance(
+        horiz_cs, (iris.coord_systems.GeogCS, iris.coord_systems.RotatedGeogCS)
+    )
     if not spherical_coords:
-
         # TODO Implement some mechanism for conforming to a common grid
         dj_dx = _curl_differentiate(j_cube, x_coord)
         prototype_diff = dj_dx
@@ -600,8 +631,8 @@ def curl(i_cube, j_cube, k_cube=None):
         di_dy = _curl_differentiate(i_cube, y_coord)
         di_dy = _curl_regrid(di_dy, prototype_diff)
         # Since prototype_diff == dj_dx we don't need to recalculate dj_dx
-#        dj_dx = _curl_differentiate(j_cube, x_coord)
-#        dj_dx = _curl_regrid(dj_dx, prototype_diff)
+        #        dj_dx = _curl_differentiate(j_cube, x_coord)
+        #        dj_dx = _curl_regrid(dj_dx, prototype_diff)
         k_cmpt = _curl_subtract(dj_dx, di_dy)
         di_dy = dj_dx = None
 
@@ -615,10 +646,14 @@ def curl(i_cube, j_cube, k_cube=None):
         #    (d/dtheta (i_cube * sin(lat)) - d_j_cube_dphi)
         # phi_cmpt = 1/r * ( d/dr (r * j_cube) - d_k_cube_dtheta)
         # theta_cmpt = 1/r * ( 1/cos(lat) * d_k_cube_dphi - d/dr (r * i_cube)
-        if y_coord.name() not in ['latitude', 'grid_latitude'] \
-                or x_coord.name() not in ['longitude', 'grid_longitude']:
-            raise ValueError('Expecting latitude as the y coord and '
-                             'longitude as the x coord for spherical curl.')
+        if y_coord.name() not in [
+            "latitude",
+            "grid_latitude",
+        ] or x_coord.name() not in ["longitude", "grid_longitude"]:
+            raise ValueError(
+                "Expecting latitude as the y coord and "
+                "longitude as the x coord for spherical curl."
+            )
 
         # Get the radius of the earth - and check for sphericity
         ellipsoid = horiz_cs
@@ -628,20 +663,19 @@ def curl(i_cube, j_cube, k_cube=None):
             # TODO: Add a test for this
             r = ellipsoid.semi_major_axis
             r_unit = cf_units.Unit("m")
-            spherical = (ellipsoid.inverse_flattening == 0.0)
+            spherical = ellipsoid.inverse_flattening == 0.0
         else:
             r = DEFAULT_SPHERICAL_EARTH_RADIUS
             r_unit = DEFAULT_SPHERICAL_EARTH_RADIUS_UNIT
             spherical = True
 
         if not spherical:
-            raise ValueError('Cannot take the curl over a non-spherical '
-                             'ellipsoid.')
+            raise ValueError("Cannot take the curl over a non-spherical ellipsoid.")
 
         lon_coord = x_coord.copy()
         lat_coord = y_coord.copy()
-        lon_coord.convert_units('radians')
-        lat_coord.convert_units('radians')
+        lon_coord.convert_units("radians")
+        lat_coord.convert_units("radians")
         lat_cos_coord = _coord_cos(lat_coord)
 
         # TODO Implement some mechanism for conforming to a common grid
@@ -654,12 +688,14 @@ def curl(i_cube, j_cube, k_cube=None):
         # recalculate dicos_dtheta.
         d_j_cube_dphi = _curl_differentiate(j_cube, lon_coord)
         d_j_cube_dphi = _curl_regrid(d_j_cube_dphi, prototype_diff)
-        new_lat_coord = d_j_cube_dphi.coord(axis='Y')
+        new_lat_coord = d_j_cube_dphi.coord(axis="Y")
         new_lat_cos_coord = _coord_cos(new_lat_coord)
         lat_dim = d_j_cube_dphi.coord_dims(new_lat_coord)[0]
-        r_cmpt = iris.analysis.maths.divide(_curl_subtract(d_j_cube_dphi,
-                                                           dicos_dtheta),
-                                            r * new_lat_cos_coord, dim=lat_dim)
+        r_cmpt = iris.analysis.maths.divide(
+            _curl_subtract(d_j_cube_dphi, dicos_dtheta),
+            r * new_lat_cos_coord,
+            dim=lat_dim,
+        )
         r_cmpt.units = r_cmpt.units / r_unit
         d_j_cube_dphi = dicos_dtheta = None
 
@@ -673,7 +709,7 @@ def curl(i_cube, j_cube, k_cube=None):
         if drj_dr is None and d_k_cube_dtheta is None:
             phi_cmpt = None
         else:
-            phi_cmpt = 1/r * _curl_subtract(drj_dr, d_k_cube_dtheta)
+            phi_cmpt = 1 / r * _curl_subtract(drj_dr, d_k_cube_dtheta)
             phi_cmpt.units = phi_cmpt.units / r_unit
 
         drj_dr = d_k_cube_dtheta = None
@@ -682,8 +718,7 @@ def curl(i_cube, j_cube, k_cube=None):
         d_k_cube_dphi = _curl_differentiate(k_cube, lon_coord)
         d_k_cube_dphi = _curl_regrid(d_k_cube_dphi, prototype_diff)
         if d_k_cube_dphi is not None:
-            d_k_cube_dphi = iris.analysis.maths.divide(d_k_cube_dphi,
-                                                       lat_cos_coord)
+            d_k_cube_dphi = iris.analysis.maths.divide(d_k_cube_dphi, lat_cos_coord)
         dri_dr = _curl_differentiate(r * i_cube, z_coord)
         if dri_dr is not None:
             dri_dr.units = dri_dr.units * r_unit
@@ -691,7 +726,7 @@ def curl(i_cube, j_cube, k_cube=None):
         if d_k_cube_dphi is None and dri_dr is None:
             theta_cmpt = None
         else:
-            theta_cmpt = 1/r * _curl_subtract(d_k_cube_dphi, dri_dr)
+            theta_cmpt = 1 / r * _curl_subtract(d_k_cube_dphi, dri_dr)
             theta_cmpt.units = theta_cmpt.units / r_unit
         d_k_cube_dphi = dri_dr = None
 
@@ -699,17 +734,33 @@ def curl(i_cube, j_cube, k_cube=None):
 
     for direction, cube in zip(vector_quantity_names, result):
         if cube is not None:
-            cube.rename('%s curl of %s' % (direction, phenomenon_name))
+            cube.rename("%s curl of %s" % (direction, phenomenon_name))
 
     return result
 
 
+#: Acceptable X-Y-Z standard name combinations that
+#:  :func:`curl` can use (via :func:`spatial_vectors_with_phenom_name`).
+DIRECTIONAL_NAMES: tuple[tuple[str, str, str], ...] = (
+    ("u", "v", "w"),
+    ("x", "y", "z"),
+    ("i", "j", "k"),
+    ("eastward", "northward", "upward"),
+    ("easterly", "northerly", "vertical"),
+    ("easterly", "northerly", "radial"),
+)
+
+
 def spatial_vectors_with_phenom_name(i_cube, j_cube, k_cube=None):
-    """
+    """Given spatially dependent cubes, return a list of the spatial coordinate names.
+
     Given 2 or 3 spatially dependent cubes, return a list of the spatial
     coordinate names with appropriate phenomenon name.
 
-    This routine is designed to identify the vector quantites which each
+    The cube standard names must match one of the combinations in
+    :data:`DIRECTIONAL_NAMES`.
+
+    This routine is designed to identify the vector quantities which each
     of the cubes provided represent and return a list of their 3d
     spatial dimension names and associated phenomenon.
     For example, given a cube of "u wind" and "v wind" the return value
@@ -719,51 +770,58 @@ def spatial_vectors_with_phenom_name(i_cube, j_cube, k_cube=None):
 #doctest: +SKIP
         (['u', 'v', 'w'], 'wind')
 
-    """
-    directional_names = (('u', 'v', 'w'), ('x', 'y', 'z'), ('i', 'j', 'k'),
-                         ('eastward', 'northward', 'upward'),
-                         ('easterly', 'northerly', 'vertical'),
-                         ('easterly', 'northerly', 'radial'))
+    Notes
+    -----
+    This function maintains laziness when called; it does not realise data.
+    See more at :doc:`/userguide/real_and_lazy_data`.
 
+
+    """
     # Create a list of the standard_names of our incoming cubes
     # (excluding the k_cube if it is None).
-    cube_standard_names = [cube.name() for cube in (i_cube, j_cube, k_cube)
-                           if cube is not None]
+    cube_standard_names = [
+        cube.name() for cube in (i_cube, j_cube, k_cube) if cube is not None
+    ]
 
     # Define a regular expr which represents (direction, phenomenon)
     # from the standard name of a cube.
     # e.g from "w wind" -> ("w", "wind")
-    vector_qty = re.compile(r'([^\W_]+)[\W_]+(.*)')
+    vector_qty = re.compile(r"([^\W_]+)[\W_]+(.*)")
 
     # Make a dictionary of {direction: phenomenon quantity}
     cube_directions, cube_phenomena = zip(
-        *[re.match(vector_qty, std_name).groups()
-            for std_name in cube_standard_names])
+        *[re.match(vector_qty, std_name).groups() for std_name in cube_standard_names]
+    )
 
     # Check that there is only one distinct phenomenon
     if len(set(cube_phenomena)) != 1:
-        raise ValueError('Vector phenomenon name not consistent between '
-                         'vector cubes. Got cube phenomena: {}; from '
-                         'standard names: {}.'.format(
-                             ', '.join(cube_phenomena),
-                             ', '.join(cube_standard_names)))
+        raise ValueError(
+            "Vector phenomenon name not consistent between "
+            "vector cubes. Got cube phenomena: {}; from "
+            "standard names: {}.".format(
+                ", ".join(cube_phenomena), ", ".join(cube_standard_names)
+            )
+        )
 
     # Get the appropriate direction list from the cube_directions we
     # have got from the standard name.
     direction = None
-    for possible_direction in directional_names:
+    for possible_direction in DIRECTIONAL_NAMES:
         # If this possible direction (minus the k_cube if it is none)
         # matches direction from the given cubes use it.
-        if possible_direction[0:len(cube_directions)] == cube_directions:
+        if possible_direction[0 : len(cube_directions)] == cube_directions:
             direction = possible_direction
 
     # If we didn't get a match, raise an Exception
     if direction is None:
-        direction_string = '; '.join(', '.join(possible_direction)
-                                     for possible_direction
-                                     in directional_names)
-        raise ValueError('{} are not recognised vector cube_directions. '
-                         'Possible cube_directions are: {}.'.format(
-                             cube_directions, direction_string))
+        direction_string = "; ".join(
+            ", ".join(possible_direction) for possible_direction in DIRECTIONAL_NAMES
+        )
+        raise ValueError(
+            "{} are not recognised vector cube_directions. "
+            "Possible cube_directions are: {}.".format(
+                cube_directions, direction_string
+            )
+        )
 
     return (direction, cube_phenomena[0])

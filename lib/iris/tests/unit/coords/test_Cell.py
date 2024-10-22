@@ -1,33 +1,17 @@
-# (C) British Crown Copyright 2013 - 2019, Met Office
+# Copyright Iris contributors
 #
-# This file is part of Iris.
-#
-# Iris is free software: you can redistribute it and/or modify it under
-# the terms of the GNU Lesser General Public License as published by the
-# Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# Iris is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU Lesser General Public License for more details.
-#
-# You should have received a copy of the GNU Lesser General Public License
-# along with Iris.  If not, see <http://www.gnu.org/licenses/>.
+# This file is part of Iris and is released under the BSD license.
+# See LICENSE in the root of the repository for full licensing details.
 """Unit tests for the :class:`iris.coords.Cell` class."""
-
-from __future__ import (absolute_import, division, print_function)
-from six.moves import (filter, input, map, range, zip)  # noqa
 
 # Import iris.tests first so that some things can be initialised before
 # importing anything else.
-import iris.tests as tests
+import iris.tests as tests  # isort:skip
 
 import datetime
-from unittest import mock
 
-import numpy as np
 import cftime
+import numpy as np
 
 from iris.coords import Cell
 from iris.time import PartialDateTime
@@ -35,48 +19,41 @@ from iris.time import PartialDateTime
 
 class Test___common_cmp__(tests.IrisTest):
     def assert_raises_on_comparison(self, cell, other, exception_type, regexp):
-        with self.assertRaisesRegexp(exception_type, regexp):
+        with self.assertRaisesRegex(exception_type, regexp):
             cell < other
-        with self.assertRaisesRegexp(exception_type, regexp):
+        with self.assertRaisesRegex(exception_type, regexp):
             cell <= other
-        with self.assertRaisesRegexp(exception_type, regexp):
+        with self.assertRaisesRegex(exception_type, regexp):
             cell > other
-        with self.assertRaisesRegexp(exception_type, regexp):
+        with self.assertRaisesRegex(exception_type, regexp):
             cell >= other
 
-    def test_cftime_cell(self):
-        # Check that cell comparison when the cell contains
-        # cftime.datetime objects raises an exception otherwise
-        # this will fall back to id comparison producing unreliable
-        # results.
-        cell = Cell(cftime.datetime(2010, 3, 21))
-        dt = mock.Mock(timetuple=mock.Mock())
-        self.assert_raises_on_comparison(cell, dt, TypeError,
-                                         'determine the order of cftime')
-        self.assert_raises_on_comparison(cell, 23, TypeError,
-                                         'determine the order of cftime')
-        self.assert_raises_on_comparison(cell, 'hello', TypeError,
-                                         'Unexpected type.*str')
-
-    def test_cftime_other(self):
-        # Check that cell comparison to a cftime.datetime object
-        # raises an exception otherwise this will fall back to id comparison
-        # producing unreliable results.
-        dt = cftime.datetime(2010, 3, 21)
-        cell = Cell(mock.Mock(timetuple=mock.Mock()))
-        self.assert_raises_on_comparison(cell, dt, TypeError,
-                                         'determine the order of cftime')
-
     def test_PartialDateTime_bounded_cell(self):
-        # Check that bounded comparisions to a PartialDateTime
-        # raise an exception. These are not supported as they
-        # depend on the calendar.
+        # Check bounded cell comparisons to a PartialDateTime
         dt = PartialDateTime(month=6)
-        cell = Cell(datetime.datetime(2010, 1, 1),
-                    bound=[datetime.datetime(2010, 1, 1),
-                           datetime.datetime(2011, 1, 1)])
-        self.assert_raises_on_comparison(cell, dt, TypeError,
-                                         'bounded region for datetime')
+        cell = Cell(
+            datetime.datetime(2010, 1, 1),
+            bound=[
+                datetime.datetime(2010, 1, 1),
+                datetime.datetime(2011, 1, 1),
+            ],
+        )
+        self.assertGreater(dt, cell)
+        self.assertGreaterEqual(dt, cell)
+        self.assertLess(cell, dt)
+        self.assertLessEqual(cell, dt)
+
+    def test_cftime_calender_bounded_cell(self):
+        # Check that cell comparisons fail with different calendars
+        dt = cftime.datetime(2010, 3, 1, calendar="360_day")
+        cell = Cell(
+            datetime.datetime(2010, 1, 1),
+            bound=[
+                datetime.datetime(2010, 1, 1),
+                datetime.datetime(2011, 1, 1),
+            ],
+        )
+        self.assert_raises_on_comparison(cell, dt, TypeError, "different calendars")
 
     def test_PartialDateTime_unbounded_cell(self):
         # Check that cell comparison works with PartialDateTimes.
@@ -88,36 +65,71 @@ class Test___common_cmp__(tests.IrisTest):
         self.assertGreaterEqual(dt, cell)
 
     def test_datetime_unbounded_cell(self):
-        # Check that cell comparison works with datetimes.
+        # Check that cell comparison works with datetimes & cftimes.
         dt = datetime.datetime(2000, 6, 15)
-        cell = Cell(datetime.datetime(2000, 1, 1))
-        # Note the absence of the inverse of these
-        # e.g. self.assertGreater(dt, cell).
-        # See http://bugs.python.org/issue8005
+        cell = Cell(cftime.datetime(2000, 1, 1))
+        self.assertGreater(dt, cell)
+        self.assertGreaterEqual(dt, cell)
         self.assertLess(cell, dt)
         self.assertLessEqual(cell, dt)
+
+    def test_0D_numpy_array(self):
+        # Check that cell comparison works with 0D numpy arrays
+
+        cell = Cell(1.3)
+
+        self.assertGreater(np.array(1.5), cell)
+        self.assertLess(np.array(1.1), cell)
+        self.assertGreaterEqual(np.array(1.3), cell)
+        self.assertLessEqual(np.array(1.3), cell)
+
+    def test_len_1_numpy_array(self):
+        # Check that cell comparison works with numpy arrays of len=1
+
+        cell = Cell(1.3)
+
+        self.assertGreater(np.array([1.5]), cell)
+        self.assertLess(np.array([1.1]), cell)
+        self.assertGreaterEqual(np.array([1.3]), cell)
+        self.assertLessEqual(np.array([1.3]), cell)
 
 
 class Test___eq__(tests.IrisTest):
     def test_datetimelike(self):
-        # Check that cell equality works with objects with a "timetuple".
-        dt = mock.Mock(timetuple=mock.Mock())
-        cell = mock.MagicMock(spec=Cell, point=datetime.datetime(2010, 3, 21),
-                              bound=None)
-        _ = cell == dt
-        cell.__eq__.assert_called_once_with(dt)
+        # Check that cell equality works with different datetime objects
+        # using the same calendar
+        point = cftime.datetime(2010, 1, 1, calendar="gregorian")
+        cell = Cell(
+            datetime.datetime(2010, 1, 1),
+            bound=None,
+        )
+        self.assertEqual(cell, point)
 
     def test_datetimelike_bounded_cell(self):
-        # Check that equality with a datetime-like bounded cell
-        # raises an error. This is not supported as it
-        # depends on the calendar which is not always known from
-        # the datetime-like bound objects.
-        other = mock.Mock(timetuple=mock.Mock())
-        cell = Cell(point=object(),
-                    bound=[mock.Mock(timetuple=mock.Mock()),
-                           mock.Mock(timetuple=mock.Mock())])
-        with self.assertRaisesRegexp(TypeError, 'bounded region for datetime'):
-            cell == other
+        # Check that cell equality works with bounded cells using different datetime objects
+        point = cftime.datetime(2010, 1, 1, calendar="gregorian")
+        cell = Cell(
+            datetime.datetime(2010, 1, 1),
+            bound=[
+                datetime.datetime(2010, 1, 1),
+                datetime.datetime(2011, 1, 1),
+            ],
+        )
+        self.assertEqual(cell, point)
+
+    def test_datetimelike_calenders_cell(self):
+        # Check that equality with a cell with a different calendar
+        # raises an error. This is not supported
+        point = cftime.datetime(2010, 1, 1, calendar="360_day")
+        cell = Cell(
+            datetime.datetime(2010, 1, 1),
+            bound=[
+                datetime.datetime(2010, 1, 1),
+                datetime.datetime(2011, 1, 1),
+            ],
+        )
+        with self.assertRaisesRegex(TypeError, "different calendars"):
+            cell >= point
 
     def test_PartialDateTime_other(self):
         cell = Cell(datetime.datetime(2010, 3, 2))
@@ -128,25 +140,107 @@ class Test___eq__(tests.IrisTest):
 
 
 class Test_contains_point(tests.IrisTest):
-    def test_datetimelike_bounded_cell(self):
-        point = object()
-        cell = Cell(point=object(),
-                    bound=[mock.Mock(timetuple=mock.Mock()),
-                           mock.Mock(timetuple=mock.Mock())])
-        with self.assertRaisesRegexp(TypeError, 'bounded region for datetime'):
+    """Test that contains_point works for combinations.
+
+    Combinations of datetime, cf.datatime, and PartialDateTime objects.
+    """
+
+    def test_datetime_PartialDateTime_point(self):
+        point = PartialDateTime(month=6)
+        cell = Cell(
+            datetime.datetime(2010, 1, 1),
+            bound=[
+                datetime.datetime(2010, 1, 1),
+                datetime.datetime(2011, 1, 1),
+            ],
+        )
+        self.assertFalse(cell.contains_point(point))
+
+    def test_datetime_cftime_standard_point(self):
+        point = cftime.datetime(2010, 6, 15)
+        cell = Cell(
+            datetime.datetime(2010, 1, 1),
+            bound=[
+                datetime.datetime(2010, 1, 1),
+                datetime.datetime(2011, 1, 1),
+            ],
+        )
+        self.assertTrue(cell.contains_point(point))
+
+    def test_datetime_cftime_360day_point(self):
+        point = cftime.datetime(2010, 6, 15, calendar="360_day")
+        cell = Cell(
+            datetime.datetime(2010, 1, 1),
+            bound=[
+                datetime.datetime(2010, 1, 1),
+                datetime.datetime(2011, 1, 1),
+            ],
+        )
+        with self.assertRaisesRegex(TypeError, "different calendars"):
             cell.contains_point(point)
 
-    def test_datetimelike_point(self):
-        point = mock.Mock(timetuple=mock.Mock())
-        cell = Cell(point=object(), bound=[object(), object()])
-        with self.assertRaisesRegexp(TypeError, 'bounded region for datetime'):
+    def test_cftime_standard_PartialDateTime_point(self):
+        point = PartialDateTime(month=6)
+        cell = Cell(
+            cftime.datetime(2010, 1, 1),
+            bound=[
+                cftime.datetime(2010, 1, 1),
+                cftime.datetime(2011, 1, 1),
+            ],
+        )
+        self.assertFalse(cell.contains_point(point))
+
+    def test_cftime_360day_PartialDateTime_point(self):
+        point = PartialDateTime(month=6)
+        cell = Cell(
+            cftime.datetime(2010, 1, 1, calendar="360_day"),
+            bound=[
+                cftime.datetime(2010, 1, 1, calendar="360_day"),
+                cftime.datetime(2011, 1, 1, calendar="360_day"),
+            ],
+        )
+        self.assertFalse(cell.contains_point(point))
+
+    def test_cftime_standard_datetime_point(self):
+        point = datetime.datetime(2010, 6, 1)
+        cell = Cell(
+            cftime.datetime(2010, 1, 1),
+            bound=[
+                cftime.datetime(2010, 1, 1),
+                cftime.datetime(2011, 1, 1),
+            ],
+        )
+        self.assertTrue(cell.contains_point(point))
+
+    def test_cftime_360day_datetime_point(self):
+        point = datetime.datetime(2010, 6, 1)
+        cell = Cell(
+            cftime.datetime(2010, 1, 1, calendar="360_day"),
+            bound=[
+                cftime.datetime(2010, 1, 1, calendar="360_day"),
+                cftime.datetime(2011, 1, 1, calendar="360_day"),
+            ],
+        )
+        with self.assertRaisesRegex(TypeError, "different calendars"):
             cell.contains_point(point)
+
+    def test_cftime_360_day_cftime_360day_point(self):
+        point = cftime.datetime(2010, 6, 15, calendar="360_day")
+        cell = Cell(
+            cftime.datetime(2010, 1, 1, calendar="360_day"),
+            bound=[
+                cftime.datetime(2010, 1, 1, calendar="360_day"),
+                cftime.datetime(2011, 1, 1, calendar="360_day"),
+            ],
+        )
+        self.assertTrue(cell.contains_point(point))
 
 
 class Test_numpy_comparison(tests.IrisTest):
+    """Unit tests to check that the results of comparisons with numpy types can be
+    used as truth values.
     """
-    Unit tests to check that the results of comparisons with numpy types can be
-    used as truth values."""
+
     def test_cell_lhs(self):
         cell = Cell(point=1.5)
         n = np.float64(1.2)
@@ -158,9 +252,8 @@ class Test_numpy_comparison(tests.IrisTest):
             bool(cell >= n)
             bool(cell == n)
             bool(cell != n)
-        except:
-            self.fail(
-                "Result of comparison could not be used as a truth value")
+        except:  # noqa
+            self.fail("Result of comparison could not be used as a truth value")
 
     def test_cell_rhs(self):
         cell = Cell(point=1.5)
@@ -173,9 +266,9 @@ class Test_numpy_comparison(tests.IrisTest):
             bool(n >= cell)
             bool(n == cell)
             bool(n != cell)
-        except:
-            self.fail(
-                "Result of comparison could not be used as a truth value")
+        except:  # noqa
+            self.fail("Result of comparison could not be used as a truth value")
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     tests.main()

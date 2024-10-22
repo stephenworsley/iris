@@ -1,21 +1,8 @@
-# (C) British Crown Copyright 2014 - 2018, Met Office
+# Copyright Iris contributors
 #
-# This file is part of Iris.
-#
-# Iris is free software: you can redistribute it and/or modify it under
-# the terms of the GNU Lesser General Public License as published by the
-# Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# Iris is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU Lesser General Public License for more details.
-#
-# You should have received a copy of the GNU Lesser General Public License
-# along with Iris.  If not, see <http://www.gnu.org/licenses/>.
-"""
-Code for fast loading of structured UM data.
+# This file is part of Iris and is released under the BSD license.
+# See LICENSE in the root of the repository for full licensing details.
+"""Code for fast loading of structured UM data.
 
 This module defines which pp-field elements take part in structured loading,
 and provides creation of :class:`BasicFieldCollation` objects from lists of
@@ -23,21 +10,18 @@ and provides creation of :class:`BasicFieldCollation` objects from lists of
 
 """
 
-from __future__ import (absolute_import, division, print_function)
-from six.moves import (filter, input, map, range, zip)  # noqa
-
 import itertools
 
 import cftime
 import numpy as np
 
 from iris._lazy_data import as_lazy_data, multidim_lazy_stack
-from iris.fileformats.um._optimal_array_structuring import \
-    optimal_array_structure
+from iris.fileformats.um._optimal_array_structuring import optimal_array_structure
 
 
-class BasicFieldCollation(object):
-    """
+class BasicFieldCollation:
+    """An object representing a group of UM fields with array structure.
+
     An object representing a group of UM fields with array structure that can
     be vectorized into a single cube.
 
@@ -61,11 +45,13 @@ class BasicFieldCollation(object):
         either scalar or full-length 1-D vectors.
 
     """
-    def __init__(self, fields):
-        """
-        Args:
 
-        * fields (iterable of :class:`iris.fileformats.pp.PPField`):
+    def __init__(self, fields):
+        """BasicFieldCollation initialise.
+
+        Parameters
+        ----------
+        fields : iterable of :class:`iris.fileformats.pp.PPField`
             The fields in the collation.
 
         """
@@ -86,9 +72,8 @@ class BasicFieldCollation(object):
         if not self._structure_calculated:
             self._calculate_structure()
         if self._data_cache is None:
-            stack = np.empty(self.vector_dims_shape, 'object')
-            for nd_index, field in zip(np.ndindex(self.vector_dims_shape),
-                                       self.fields):
+            stack = np.empty(self.vector_dims_shape, "object")
+            for nd_index, field in zip(np.ndindex(self.vector_dims_shape), self.fields):
                 stack[nd_index] = as_lazy_data(field._data)
             self._data_cache = multidim_lazy_stack(stack)
         return self._data_cache
@@ -98,8 +83,7 @@ class BasicFieldCollation(object):
 
     @property
     def realised_dtype(self):
-        return np.result_type(*[field.realised_dtype
-                                for field in self._fields])
+        return np.result_type(*[field.realised_dtype for field in self._fields])
 
     @property
     def data_proxy(self):
@@ -109,7 +93,7 @@ class BasicFieldCollation(object):
     def bmdi(self):
         bmdis = set([f.bmdi for f in self.fields])
         if len(bmdis) != 1:
-            raise ValueError('Multiple bmdi values defined in FieldCollection')
+            raise ValueError("Multiple bmdi values defined in FieldCollection")
         return bmdis.pop()
 
     @property
@@ -128,8 +112,7 @@ class BasicFieldCollation(object):
 
     @property
     def element_arrays_and_dims(self):
-        """
-        Value arrays for vector metadata elements.
+        """Value arrays for vector metadata elements.
 
         A dictionary mapping element_name: (value_array, dims).
 
@@ -143,28 +126,41 @@ class BasicFieldCollation(object):
 
     def _field_vector_element_arrays(self):
         """Define the field components used in the structure analysis."""
+
         # Define functions to make t1 and t2 values as date-time tuples.
         # These depend on header version (PPField2 has no seconds values).
         def t1_fn(fld):
-            return (fld.lbyr, fld.lbmon, fld.lbdat, fld.lbhr, fld.lbmin,
-                    getattr(fld, 'lbsec', 0))
+            return (
+                fld.lbyr,
+                fld.lbmon,
+                fld.lbdat,
+                fld.lbhr,
+                fld.lbmin,
+                getattr(fld, "lbsec", 0),
+            )
 
         def t2_fn(fld):
-            return (fld.lbyrd, fld.lbmond, fld.lbdatd, fld.lbhrd, fld.lbmind,
-                    getattr(fld, 'lbsecd', 0))
+            return (
+                fld.lbyrd,
+                fld.lbmond,
+                fld.lbdatd,
+                fld.lbhrd,
+                fld.lbmind,
+                getattr(fld, "lbsecd", 0),
+            )
 
         # Return a list of (name, array) for the vectorizable elements.
         component_arrays = [
-            ('t1', np.array([t1_fn(fld) for fld in self.fields])),
-            ('t2', np.array([t2_fn(fld) for fld in self.fields])),
-            ('lbft', np.array([fld.lbft for fld in self.fields])),
-            ('blev', np.array([fld.blev for fld in self.fields])),
-            ('lblev', np.array([fld.lblev for fld in self.fields])),
-            ('bhlev', np.array([fld.bhlev for fld in self.fields])),
-            ('bhrlev', np.array([fld.bhrlev for fld in self.fields])),
-            ('brsvd1', np.array([fld.brsvd[0] for fld in self.fields])),
-            ('brsvd2', np.array([fld.brsvd[1] for fld in self.fields])),
-            ('brlev', np.array([fld.brlev for fld in self.fields]))
+            ("t1", np.array([t1_fn(fld) for fld in self.fields])),
+            ("t2", np.array([t2_fn(fld) for fld in self.fields])),
+            ("lbft", np.array([fld.lbft for fld in self.fields])),
+            ("blev", np.array([fld.blev for fld in self.fields])),
+            ("lblev", np.array([fld.lblev for fld in self.fields])),
+            ("bhlev", np.array([fld.bhlev for fld in self.fields])),
+            ("bhrlev", np.array([fld.bhrlev for fld in self.fields])),
+            ("brsvd1", np.array([fld.brsvd[0] for fld in self.fields])),
+            ("brsvd2", np.array([fld.brsvd[1] for fld in self.fields])),
+            ("brlev", np.array([fld.brlev for fld in self.fields])),
         ]
         return component_arrays
 
@@ -172,8 +168,7 @@ class BasicFieldCollation(object):
     _TIME_ELEMENT_MULTIPLIERS = np.cumprod([1, 60, 60, 24, 31, 12])[::-1]
 
     def _time_comparable_int(self, yr, mon, dat, hr, min, sec):
-        """
-        Return a single unique number representing a date-time tuple.
+        """Return a single unique number representing a date-time tuple.
 
         This calculation takes no account of the time field's real calendar,
         instead giving every month 31 days, which preserves the required
@@ -188,39 +183,48 @@ class BasicFieldCollation(object):
         element_definitions = self._field_vector_element_arrays()
 
         # Identify the vertical elements and payload.
-        blev_array = dict(element_definitions).get('blev')
-        vertical_elements = ('lblev', 'bhlev', 'bhrlev',
-                             'brsvd1', 'brsvd2', 'brlev')
+        blev_array = dict(element_definitions).get("blev")
+        vertical_elements = (
+            "lblev",
+            "bhlev",
+            "bhrlev",
+            "brsvd1",
+            "brsvd2",
+            "brlev",
+        )
 
         # Make an ordering copy.
         ordering_definitions = element_definitions[:]
         # Replace time value tuples with integers and bind the vertical
         # elements to the (expected) primary vertical element "blev".
         for index, (name, array) in enumerate(ordering_definitions):
-            if name in ('t1', 't2'):
+            if name in ("t1", "t2"):
                 array = np.array(
-                    [self._time_comparable_int(*tuple(val)) for val in array])
+                    [self._time_comparable_int(*tuple(val)) for val in array]
+                )
                 ordering_definitions[index] = (name, array)
             if name in vertical_elements and blev_array is not None:
                 ordering_definitions[index] = (name, blev_array)
 
         # Perform the main analysis: get vector dimensions, elements, arrays.
-        dims_shape, primary_elements, vector_element_arrays_and_dims = \
-            optimal_array_structure(ordering_definitions,
-                                    element_definitions)
+        (
+            dims_shape,
+            primary_elements,
+            vector_element_arrays_and_dims,
+        ) = optimal_array_structure(ordering_definitions, element_definitions)
 
         # Replace time tuples in the result with real datetime-like values.
         # N.B. so we *don't* do this on the whole (expanded) input arrays.
-        for name in ('t1', 't2'):
+        for name in ("t1", "t2"):
             if name in vector_element_arrays_and_dims:
                 arr, dims = vector_element_arrays_and_dims[name]
                 arr_shape = arr.shape[:-1]
                 extra_length = arr.shape[-1]
                 # Flatten out the array apart from the last dimension,
                 # convert to cftime objects, then reshape back.
-                arr = np.array([cftime.datetime(*args)
-                                for args in arr.reshape(-1, extra_length)]
-                               ).reshape(arr_shape)
+                arr = np.array(
+                    [cftime.datetime(*args) for args in arr.reshape(-1, extra_length)]
+                ).reshape(arr_shape)
                 vector_element_arrays_and_dims[name] = (arr, dims)
 
         # Write the private cache values, exposed as public properties.
@@ -232,18 +236,18 @@ class BasicFieldCollation(object):
 
 
 def _um_collation_key_function(field):
-    """
-    Standard collation key definition for fast structured field loading.
+    """Collation key definition for fast structured field loading.
 
     The elements used here are the minimum sufficient to define the
     'phenomenon', as described for :meth:`group_structured_fields`.
 
     """
-    return (field.lbuser[3],  # stashcode first
-            field.lbproc,  # then stats processing
-            field.lbuser[6],  # then model
-            field.lbuser[4]  # then pseudo-level : this one is a KLUDGE.
-            )
+    return (
+        field.lbuser[3],  # stashcode first
+        field.lbproc,  # then stats processing
+        field.lbuser[6],  # then model
+        field.lbuser[4],  # then pseudo-level : this one is a KLUDGE.
+    )
     # NOTE: including pseudo-level here makes it treat different pseudo-levels
     # as different phenomena.  These will later be merged in the "ordinary"
     # post-load merge.
@@ -259,43 +263,46 @@ def _um_collation_key_function(field):
     # vector pseudo-level coordinate directly in the structured load analysis.
 
 
-def group_structured_fields(field_iterator,
-                            collation_class=BasicFieldCollation,
-                            **collation_kwargs):
-    """
+def group_structured_fields(
+    field_iterator, collation_class=BasicFieldCollation, **collation_kwargs
+):
+    """Collect structured fields into identified groups.
+
     Collect structured fields into identified groups whose fields can be
     combined to form a single cube.
 
-    Args:
-
-    * field_iterator (iterator of :class:`iris.fileformats.pp.PPField`):
+    Parameters
+    ----------
+    field_iterator : iterator of :class:`iris.fileformats.pp.PPField`
         A source of PP or FF fields.  N.B. order is significant.
-
-    Kwargs:
-
-    * collation_class (class):
+    collation_class : class, optional, default=BasicFieldCollation
         Type of collation wrapper to create from each group of fields.
-    * collation_kwargs (dict):
+    **collation_kwargs : dict
         Additional constructor keywords for collation creation.
+
+    Returns
+    -------
+    Generator of 'collation_class' objects
+        A generator of 'collation_class' objects, each of which contains a
+        single collated group from the input fields.
+
+    Notes
+    -----
+    Implicitly, within each result group, *all* other metadata components
+    should be either:
+
+    * the same for all fields,
+    * completely irrelevant, or
+    * used by a vectorised rule function (such as
+      :func:`iris.fileformats.pp_load_rules._convert_time_coords`).
 
     The function sorts and collates on phenomenon-relevant metadata only,
     defined as the field components: 'lbuser[3]' (stash), 'lbproc' (statistic),
     'lbuser[6]' (model).
+
     Each distinct combination of these defines a specific phenomenon (or
     statistical aggregation of one), and those fields appear as a single
     iteration result.
-
-    Implicitly, within each result group, *all* other metadata components
-    should be either:
-
-    *  the same for all fields,
-    *  completely irrelevant, or
-    *  used by a vectorised rule function (such as
-       :func:`iris.fileformats.pp_load_rules._convert_time_coords`).
-
-    Returns:
-        A generator of 'collation_class' objects, each of which contains a
-        single collated group from the input fields.
 
     .. note::
 

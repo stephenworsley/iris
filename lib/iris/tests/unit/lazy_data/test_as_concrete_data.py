@@ -1,27 +1,12 @@
-# (C) British Crown Copyright 2017 - 2019, Met Office
+# Copyright Iris contributors
 #
-# This file is part of Iris.
-#
-# Iris is free software: you can redistribute it and/or modify it under
-# the terms of the GNU Lesser General Public License as published by the
-# Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# Iris is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU Lesser General Public License for more details.
-#
-# You should have received a copy of the GNU Lesser General Public License
-# along with Iris.  If not, see <http://www.gnu.org/licenses/>.
+# This file is part of Iris and is released under the BSD license.
+# See LICENSE in the root of the repository for full licensing details.
 """Test function :func:`iris._lazy data.as_concrete_data`."""
-
-from __future__ import (absolute_import, division, print_function)
-from six.moves import (filter, input, map, range, zip)  # noqa
 
 # Import iris.tests first so that some things can be initialised before
 # importing anything else.
-import iris.tests as tests
+import iris.tests as tests  # isort:skip
 
 import numpy as np
 import numpy.ma as ma
@@ -29,7 +14,7 @@ import numpy.ma as ma
 from iris._lazy_data import as_concrete_data, as_lazy_data, is_lazy_data
 
 
-class MyProxy(object):
+class MyProxy:
     def __init__(self, a):
         self.shape = a.shape
         self.dtype = a.dtype
@@ -75,7 +60,8 @@ class Test_as_concrete_data(tests.IrisTest):
     def test_lazy_scalar_proxy(self):
         a = np.array(5)
         proxy = MyProxy(a)
-        lazy_array = as_lazy_data(proxy)
+        meta = np.empty((0,) * proxy.ndim, dtype=proxy.dtype)
+        lazy_array = as_lazy_data(proxy, meta=meta)
         self.assertTrue(is_lazy_data(lazy_array))
         result = as_concrete_data(lazy_array)
         self.assertFalse(is_lazy_data(result))
@@ -84,12 +70,13 @@ class Test_as_concrete_data(tests.IrisTest):
     def test_lazy_scalar_proxy_masked(self):
         a = np.ma.masked_array(5, True)
         proxy = MyProxy(a)
-        lazy_array = as_lazy_data(proxy)
+        meta = np.ma.array(np.empty((0,) * proxy.ndim, dtype=proxy.dtype), mask=True)
+        lazy_array = as_lazy_data(proxy, meta=meta)
         self.assertTrue(is_lazy_data(lazy_array))
         result = as_concrete_data(lazy_array)
         self.assertFalse(is_lazy_data(result))
         self.assertMaskedArrayEqual(result, a)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     tests.main()

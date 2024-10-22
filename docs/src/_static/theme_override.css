@@ -1,0 +1,28 @@
+/* import the standard theme css */
+@import url("styles/theme.css");
+
+/* now we can add custom css.... */
+
+/* Used for very strong warning */
+#slim-red-box-banner {
+  background: #ff0000;
+  box-sizing: border-box;
+  color: #ffffff;
+  font-weight: normal;
+  padding: 0.5em;
+}
+
+#slim-red-box-banner a {
+  color: #ffffff;
+  font-weight: normal;
+  text-decoration: underline;
+}
+
+/* bullet point list with green ticks */
+ul.squarelist {
+  /* https://developer.mozilla.org/en-US/docs/Web/CSS/list-style-type */
+  list-style-type: "\2705";
+  margin-left: 0;
+  text-indent: 1em;
+  padding-left: 5em;
+}

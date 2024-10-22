@@ -1,34 +1,20 @@
-# (C) British Crown Copyright 2014 - 2019, Met Office
+# Copyright Iris contributors
 #
-# This file is part of Iris.
-#
-# Iris is free software: you can redistribute it and/or modify it under
-# the terms of the GNU Lesser General Public License as published by the
-# Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# Iris is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU Lesser General Public License for more details.
-#
-# You should have received a copy of the GNU Lesser General Public License
-# along with Iris.  If not, see <http://www.gnu.org/licenses/>.
+# This file is part of Iris and is released under the BSD license.
+# See LICENSE in the root of the repository for full licensing details.
 """Unit tests for the `iris.plot.contourf` function."""
-
-from __future__ import (absolute_import, division, print_function)
-from six.moves import (filter, input, map, range, zip)  # noqa
 
 # Import iris.tests first so that some things can be initialised before
 # importing anything else.
-import iris.tests as tests
+import iris.tests as tests  # isort:skip
 
 from unittest import mock
 
+import matplotlib.pyplot as plt
 import numpy as np
 
 from iris.tests.stock import simple_2d
-from iris.tests.unit.plot import TestGraphicStringCoord, MixinCoords
+from iris.tests.unit.plot import MixinCoords, TestGraphicStringCoord
 
 if tests.MPL_AVAILABLE:
     import iris.plot as iplt
@@ -37,35 +23,37 @@ if tests.MPL_AVAILABLE:
 @tests.skip_plot
 class TestStringCoordPlot(TestGraphicStringCoord):
     def test_yaxis_labels(self):
-        iplt.contourf(self.cube, coords=('bar', 'str_coord'))
-        self.assertPointsTickLabels('yaxis')
+        iplt.contourf(self.cube, coords=("bar", "str_coord"))
+        self.assertPointsTickLabels("yaxis")
 
     def test_xaxis_labels(self):
-        iplt.contourf(self.cube, coords=('str_coord', 'bar'))
-        self.assertPointsTickLabels('xaxis')
+        iplt.contourf(self.cube, coords=("str_coord", "bar"))
+        self.assertPointsTickLabels("xaxis")
 
     def test_yaxis_labels_with_axes(self):
         import matplotlib.pyplot as plt
+
         fig = plt.figure()
         ax = fig.add_subplot(111)
-        iplt.contourf(self.cube, axes=ax, coords=('bar', 'str_coord'))
+        iplt.contourf(self.cube, axes=ax, coords=("bar", "str_coord"))
         plt.close(fig)
-        self.assertPointsTickLabels('yaxis', ax)
+        self.assertPointsTickLabels("yaxis", ax)
 
     def test_xaxis_labels_with_axes(self):
         import matplotlib.pyplot as plt
+
         fig = plt.figure()
         ax = fig.add_subplot(111)
-        iplt.contourf(self.cube, axes=ax, coords=('str_coord', 'bar'))
+        iplt.contourf(self.cube, axes=ax, coords=("str_coord", "bar"))
         plt.close(fig)
-        self.assertPointsTickLabels('xaxis', ax)
+        self.assertPointsTickLabels("xaxis", ax)
 
     def test_geoaxes_exception(self):
         import matplotlib.pyplot as plt
+
         fig = plt.figure()
         ax = fig.add_subplot(111)
-        self.assertRaises(TypeError, iplt.contourf,
-                          self.lat_lon_cube, axes=ax)
+        self.assertRaises(TypeError, iplt.contourf, self.lat_lon_cube, axes=ax)
         plt.close(fig)
 
 
@@ -74,16 +62,50 @@ class TestCoords(tests.IrisTest, MixinCoords):
     def setUp(self):
         # We have a 2d cube with dimensionality (bar: 3; foo: 4)
         self.cube = simple_2d(with_bounds=False)
-        self.foo = self.cube.coord('foo').points
+        self.foo = self.cube.coord("foo").points
         self.foo_index = np.arange(self.foo.size)
-        self.bar = self.cube.coord('bar').points
+        self.bar = self.cube.coord("bar").points
         self.bar_index = np.arange(self.bar.size)
         self.data = self.cube.data
         self.dataT = self.data.T
-        mocker = mock.Mock(alpha=0, antialiased=False)
-        self.mpl_patch = self.patch('matplotlib.pyplot.contourf',
-                                    return_value=mocker)
+        mocker = mock.Mock(wraps=plt.contourf)
+        self.mpl_patch = self.patch("matplotlib.pyplot.contourf", mocker)
         self.draw_func = iplt.contourf
+
+
+@tests.skip_plot
+class TestAntialias(tests.IrisTest):
+    def setUp(self):
+        self.fig = plt.figure()
+
+    def test_skip_contour(self):
+        # Contours should not be added if data is all below second level.  See #4086.
+        cube = simple_2d()
+
+        levels = [5, 15, 20, 200]
+        colors = ["b", "r", "y"]
+
+        with mock.patch("matplotlib.pyplot.contour") as mocked_contour:
+            iplt.contourf(cube, levels=levels, colors=colors, antialiased=True)
+
+        mocked_contour.assert_not_called()
+
+    def test_apply_contour_nans(self):
+        # Presence of nans should not prevent contours being added.
+        cube = simple_2d()
+        cube.data = cube.data.astype(np.float64)
+        cube.data[0, 0] = np.nan
+
+        levels = [2, 4, 6, 8]
+        colors = ["b", "r", "y"]
+
+        with mock.patch("matplotlib.pyplot.contour") as mocked_contour:
+            iplt.contourf(cube, levels=levels, colors=colors, antialiased=True)
+
+        mocked_contour.assert_called_once()
+
+    def tearDown(self):
+        plt.close(self.fig)
 
 
 if __name__ == "__main__":

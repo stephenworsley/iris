@@ -1,28 +1,12 @@
-# (C) British Crown Copyright 2010 - 2019, Met Office
+# Copyright Iris contributors
 #
-# This file is part of Iris.
-#
-# Iris is free software: you can redistribute it and/or modify it under
-# the terms of the GNU Lesser General Public License as published by the
-# Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# Iris is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU Lesser General Public License for more details.
-#
-# You should have received a copy of the GNU Lesser General Public License
-# along with Iris.  If not, see <http://www.gnu.org/licenses/>.
-"""
+# This file is part of Iris and is released under the BSD license.
+# See LICENSE in the root of the repository for full licensing details.
+"""Color map pallettes management.
+
 Load, configure and register color map palettes and initialise
 color map meta-data mappings.
-
 """
-
-from __future__ import (absolute_import, division, print_function)
-from six.moves import (filter, input, map, range, zip)  # noqa
-import six
 
 from functools import wraps
 import os
@@ -30,16 +14,16 @@ import os.path
 import re
 
 import cf_units
+from matplotlib import colormaps as mpl_colormaps
 import matplotlib.cm as mpl_cm
 import matplotlib.colors as mpl_colors
 import numpy as np
 
-import iris.cube
 import iris.config
-
+import iris.cube
 
 # Symmetric normalization function pivot points by SI unit.
-PIVOT_BY_UNIT = {cf_units.Unit('K'): 273.15}
+PIVOT_BY_UNIT = {cf_units.Unit("K"): 273.15}
 
 # Color map names by palette file metadata field value.
 CMAP_BREWER = set()
@@ -47,21 +31,21 @@ _CMAP_BY_SCHEME = None
 _CMAP_BY_KEYWORD = None
 _CMAP_BY_STD_NAME = None
 
-_MISSING_KWARG_CMAP = 'missing kwarg cmap'
-_MISSING_KWARG_NORM = 'missing kwarg norm'
+_MISSING_KWARG_CMAP = "missing kwarg cmap"
+_MISSING_KWARG_NORM = "missing kwarg norm"
 
 
 def is_brewer(cmap):
-    """
-    Determine whether the color map is a Cynthia Brewer color map.
+    """Determine whether the color map is a Cynthia Brewer color map.
 
-    Args:
-
-    * cmap:
+    Parameters
+    ----------
+    cmap :
         The color map instance.
 
-    Returns:
-        Boolean.
+    Returns
+    -------
+    bool
 
     """
     result = False
@@ -71,9 +55,11 @@ def is_brewer(cmap):
 
 
 def _default_cmap_norm(args, kwargs):
-    """
-    This function injects default cmap and norm behavour into the keyword
+    """Inject default cmap and norm behaviour into the keyword arguments.
+
+    This function injects default cmap and norm behaviour into the keyword
     arguments, based on the cube referenced within the positional arguments.
+
     """
     cube = None
 
@@ -84,11 +70,11 @@ def _default_cmap_norm(args, kwargs):
             break
 
     # Find the keyword arguments of interest.
-    colors = kwargs.get('colors', None)
+    colors = kwargs.get("colors", None)
     # cmap = None to disable default behaviour.
-    cmap = kwargs.get('cmap', _MISSING_KWARG_CMAP)
+    cmap = kwargs.get("cmap", _MISSING_KWARG_CMAP)
     # norm = None to disable default behaviour.
-    norm = kwargs.get('norm', _MISSING_KWARG_NORM)
+    norm = kwargs.get("norm", _MISSING_KWARG_NORM)
 
     # Note that "colors" and "cmap" keywords are mutually exclusive.
     if colors is None and cube is not None:
@@ -101,67 +87,74 @@ def _default_cmap_norm(args, kwargs):
 
             if len(cmaps) == 0:
                 # Check for a fuzzy match against a keyword.
-                for keyword in six.iterkeys(_CMAP_BY_KEYWORD):
+                for keyword in _CMAP_BY_KEYWORD.keys():
                     if keyword in std_name:
                         cmaps.update(_CMAP_BY_KEYWORD[keyword])
 
             # Add default color map to keyword arguments.
             if len(cmaps):
                 cmap = sorted(cmaps, reverse=True)[0]
-                kwargs['cmap'] = mpl_cm.get_cmap(cmap)
+                kwargs["cmap"] = mpl_cm.get_cmap(cmap)
 
         # Perform default "norm" keyword behaviour.
         if norm == _MISSING_KWARG_NORM:
-            if 'anomaly' in std_name:
+            if "anomaly" in std_name:
                 # Determine the pivot point.
                 pivot = PIVOT_BY_UNIT.get(cube.units, 0)
                 norm = SymmetricNormalize(pivot)
-                kwargs['norm'] = norm
+                kwargs["norm"] = norm
 
     return args, kwargs
 
 
 def cmap_norm(cube):
-    """
+    """Determine the default.
+
     Determine the default :class:`matplotlib.colors.LinearSegmentedColormap`
     and :class:`iris.palette.SymmetricNormalize` instances associated with
     the cube.
 
-    Args:
-
-    * cube (:class:`iris.cube.Cube`):
+    Parameters
+    ----------
+    cube : :class:`iris.cube.Cube`
         Source cube to generate default palette from.
 
-    Returns:
+    Returns
+    -------
+    tuple
         Tuple of :class:`matplotlib.colors.LinearSegmentedColormap` and
-        :class:`iris.palette.SymmetricNormalize`
+        :class:`iris.palette.SymmetricNormalize`.
+
+    Notes
+    -----
+    This function maintains laziness when called; it does not realise data.
+    See more at :doc:`/userguide/real_and_lazy_data`.
 
     """
     args, kwargs = _default_cmap_norm((cube,), {})
-    return kwargs.get('cmap'), kwargs.get('norm')
+    return kwargs.get("cmap"), kwargs.get("norm")
 
 
 def auto_palette(func):
-    """
+    """Auto palette decorator wrapper function to control the default behaviour.
+
     Decorator wrapper function to control the default behaviour of the
     matplotlib cmap and norm keyword arguments.
 
-    Args:
-
-    * func (callable):
+    Parameters
+    ----------
+    func : callable
         Callable function to be wrapped by the decorator.
 
-    Returns:
-        Closure wrapper function.
+    Returns
+    -------
+    Closure wrapper function.
 
     """
+
     @wraps(func)
     def wrapper_func(*args, **kwargs):
-        """
-        Closure wrapper function to provide default keyword argument
-        behaviour.
-
-        """
+        """Closure wrapper function to provide default keyword argument behaviour."""
         # Update the keyword arguments with defaults.
         args, kwargs = _default_cmap_norm(args, kwargs)
         # Call the wrapped function and return its result.
@@ -171,10 +164,8 @@ def auto_palette(func):
     return wrapper_func
 
 
-class SymmetricNormalize(mpl_colors.Normalize, object):
-    """
-    Provides a symmetric normalization class around a given pivot point.
-    """
+class SymmetricNormalize(mpl_colors.Normalize):
+    """Provides a symmetric normalization class around a given pivot point."""
 
     def __init__(self, pivot, *args, **kwargs):
         self.pivot = pivot
@@ -183,7 +174,7 @@ class SymmetricNormalize(mpl_colors.Normalize, object):
         mpl_colors.Normalize.__init__(self, *args, **kwargs)
 
     def __repr__(self):
-        return '%s(%r)' % (self.__class__.__name__, self.pivot)
+        return "%s(%r)" % (self.__class__.__name__, self.pivot)
 
     def _update(self, val, update_min=True, update_max=True):
         # Update both _vmin and _vmax from given value.
@@ -199,7 +190,7 @@ class SymmetricNormalize(mpl_colors.Normalize, object):
 
     @property
     def vmin(self):
-        return getattr(self, '_vmin')
+        return getattr(self, "_vmin")
 
     @vmin.setter
     def vmin(self, val):
@@ -214,7 +205,7 @@ class SymmetricNormalize(mpl_colors.Normalize, object):
 
     @property
     def vmax(self):
-        return getattr(self, '_vmax')
+        return getattr(self, "_vmax")
 
     @vmax.setter
     def vmax(self, val):
@@ -229,7 +220,8 @@ class SymmetricNormalize(mpl_colors.Normalize, object):
 
 
 def _load_palette():
-    """
+    """Load palette.
+
     Load, configure and register color map palettes and initialise
     color map metadata mappings.
 
@@ -246,12 +238,16 @@ def _load_palette():
     # Identify all .txt color map palette files.
     for root, dirs, files in os.walk(iris.config.PALETTE_PATH):
         # Prune any .svn directory from the tree walk.
-        if '.svn' in dirs:
-            del dirs[dirs.index('.svn')]
+        if ".svn" in dirs:
+            del dirs[dirs.index(".svn")]
         # Identify any target .txt color map palette files.
-        filenames.extend([os.path.join(root, filename)
-                          for filename in files
-                          if os.path.splitext(filename)[1] == '.txt'])
+        filenames.extend(
+            [
+                os.path.join(root, filename)
+                for filename in files
+                if os.path.splitext(filename)[1] == ".txt"
+            ]
+        )
 
     for filename in filenames:
         # Default color map name based on the file base-name (case-SENSITIVE).
@@ -267,47 +263,51 @@ def _load_palette():
 
         # Read the file header.
         with open(filename) as file_handle:
-            header = filter(lambda line: re.match('^\s*#.*:\s+.*$', line),
-                            file_handle.readlines())
+            header = filter(
+                lambda line: re.match(r"^\s*#.*:\s+.*$", line),
+                file_handle.readlines(),
+            )
 
         # Extract the file header metadata.
         for line in header:
-            line = line.replace('#', '', 1).split(':')
+            line = line.replace("#", "", 1).split(":")
             head = line[0].strip().lower()
             body = line[1].strip()
 
-            if head == 'name':
+            if head == "name":
                 # Case-SENSITIVE.
-                cmap_name = 'brewer_{}'.format(body)
+                cmap_name = "brewer_{}".format(body)
 
-            if head == 'scheme':
+            if head == "scheme":
                 # Case-insensitive.
                 cmap_scheme = body.lower()
 
-            if head == 'keyword':
+            if head == "keyword":
                 # Case-insensitive.
-                keywords = [part.strip().lower() for part in body.split(',')]
+                keywords = [part.strip().lower() for part in body.split(",")]
                 cmap_keywords.extend(keywords)
 
-            if head == 'std_name':
+            if head == "std_name":
                 # Case-insensitive.
-                std_names = [part.strip().lower() for part in body.split(',')]
+                std_names = [part.strip().lower() for part in body.split(",")]
                 cmap_std_names.extend(std_names)
 
-            if head == 'interpolate':
+            if head == "interpolate":
                 # Case-insensitive.
-                interpolate_flag = body.lower() != 'off'
+                interpolate_flag = body.lower() != "off"
 
-            if head == 'type':
+            if head == "type":
                 # Case-insensitive.
                 cmap_type = body.lower()
 
         # Integrity check for meta-data 'type' field.
-        assert cmap_type is not None, \
-            'Missing meta-data "type" keyword for color map file, "%s"' % \
-            filename
-        assert cmap_type == 'rgb', \
-            'Invalid type [%s] for color map file "%s"' % (cmap_type, filename)
+        assert cmap_type is not None, (
+            'Missing meta-data "type" keyword for color map file, "%s"' % filename
+        )
+        assert cmap_type == "rgb", 'Invalid type [%s] for color map file "%s"' % (
+            cmap_type,
+            filename,
+        )
 
         # Update the color map look-up dictionaries.
         CMAP_BREWER.add(cmap_name)
@@ -332,17 +332,17 @@ def _load_palette():
         if interpolate_flag:
             # Perform default color map interpolation for quantization
             # levels per primary color.
-            cmap = mpl_colors.LinearSegmentedColormap.from_list(
-                cmap_name, cmap_data)
+            cmap = mpl_colors.LinearSegmentedColormap.from_list(cmap_name, cmap_data)
         else:
             # Restrict quantization levels per primary color (turn-off
             # interpolation).
             # Typically used for Brewer color maps.
             cmap = mpl_colors.LinearSegmentedColormap.from_list(
-                cmap_name, cmap_data, N=len(cmap_data))
+                cmap_name, cmap_data, N=len(cmap_data)
+            )
 
         # Register the color map for use.
-        mpl_cm.register_cmap(cmap=cmap)
+        mpl_colormaps.register(cmap)
 
 
 # Ensure to load the color map palettes.
