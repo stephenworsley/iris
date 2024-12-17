@@ -57,55 +57,6 @@ _TOKEN_PARSE = re.compile(r"""^[a-zA-Z0-9][\w\.\+\-@]*$""")
 logger = get_logger(__name__, fmt="[%(cls)s.%(funcName)s]")
 
 
-_num2date_original = cf_units.Unit.num2date
-
-
-def _num2date_to_nearest_second(
-    self,
-    time_value,
-    only_use_cftime_datetimes=True,
-    only_use_python_datetimes=False,
-):
-    # Used to monkey-patch the cf_units.Unit.num2date method to round to the
-    #  nearest second, which was the legacy behaviour. This is under a FUTURE
-    #  flag - users will need to adapt to microsecond precision eventually,
-    #  which may involve floating point issues.
-    def _round(date):
-        if date.microsecond == 0:
-            return date
-        elif date.microsecond < 500000:
-            return date - timedelta(microseconds=date.microsecond)
-        else:
-            return (
-                date + timedelta(seconds=1) - timedelta(microseconds=date.microsecond)
-            )
-
-    result = _num2date_original(
-        self, time_value, only_use_cftime_datetimes, only_use_python_datetimes
-    )
-    if FUTURE.date_microseconds is False:
-        message = (
-            "You are using legacy date precision for Iris units - max "
-            "precision is seconds. In future, Iris will use microsecond "
-            "precision - from cf-units version 3.3 - which may affect core "
-            "behaviour. To opt-in to the "
-            "new behaviour, set `iris.FUTURE.date_microseconds = True`."
-        )
-        warnings.warn(message, category=FutureWarning)
-
-        if hasattr(result, "shape"):
-            vfunc = np.vectorize(_round)
-            result = vfunc(result)
-        else:
-            result = _round(result)
-
-    return result
-
-
-# See the note in _num2date_to_nearest_second.
-cf_units.Unit.num2date = _num2date_to_nearest_second
-
-
 def hexdigest(item):
     """Calculate a hexadecimal string hash representation of the provided item.
 
