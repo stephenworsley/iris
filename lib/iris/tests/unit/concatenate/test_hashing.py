@@ -9,10 +9,12 @@ import numpy as np
 import pytest
 
 from iris import _concatenate
+from iris.tests.unit.util.test_array_equal import TEST_CASES
+from iris.util import array_equal
 
 
 @pytest.mark.parametrize(
-    "a,b,eq",
+    ("a", "b", "eq"),
     [
         (np.arange(2), da.arange(2), True),
         (np.arange(2), np.arange(2).reshape((1, 2)), False),
@@ -21,6 +23,8 @@ from iris import _concatenate
         (np.array([np.nan, 1.0]), np.array([np.nan, 1.0]), True),
         (np.ma.array([1, 2], mask=[0, 1]), np.ma.array([1, 2], mask=[0, 1]), True),
         (np.ma.array([1, 2], mask=[0, 1]), np.ma.array([1, 2], mask=[0, 0]), False),
+        (np.ma.array([1, 2], mask=[1, 1]), np.ma.array([1, 2], mask=[1, 1]), True),
+        (np.ma.array([1, 2], mask=[0, 0]), np.ma.array([1, 2], mask=[0, 0]), True),
         (da.arange(6).reshape((2, 3)), da.arange(6, chunks=1).reshape((2, 3)), True),
         (da.arange(20, chunks=1), da.arange(20, chunks=2), True),
         (
@@ -31,6 +35,21 @@ from iris import _concatenate
         (
             da.ma.masked_array([1, 2], mask=[0, 1]),
             da.ma.masked_array([1, 3], mask=[0, 1]),
+            True,
+        ),
+        (
+            np.arange(2),
+            da.ma.masked_array(np.arange(2), mask=[0, 0]),
+            True,
+        ),
+        (
+            np.arange(2),
+            da.ma.masked_array(np.arange(2), mask=[0, 1]),
+            False,
+        ),
+        (
+            da.ma.masked_array(np.arange(10), mask=np.zeros(10)),
+            da.ma.masked_array(np.arange(10), mask=np.ma.nomask),
             True,
         ),
         (
@@ -56,6 +75,20 @@ from iris import _concatenate
 def test_compute_hashes(a, b, eq):
     hashes = _concatenate._compute_hashes({"a": a, "b": b})
     assert eq == (hashes["a"] == hashes["b"])
+
+
+@pytest.mark.parametrize(
+    ("a", "b"),
+    [
+        (a, b)
+        for (a, b, withnans, eq) in TEST_CASES
+        if isinstance(a, np.ndarray | da.Array) and isinstance(b, np.ndarray | da.Array)
+    ],
+)
+def test_compute_hashes_vs_array_equal(a, b):
+    """Test that hashing give the same answer as `array_equal(withnans=True)`."""
+    hashes = _concatenate._compute_hashes({"a": a, "b": b})
+    assert array_equal(a, b, withnans=True) == (hashes["a"] == hashes["b"])
 
 
 def test_arrayhash_equal_incompatible_chunks_raises():

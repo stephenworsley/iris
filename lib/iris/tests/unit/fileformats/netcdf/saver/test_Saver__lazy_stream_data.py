@@ -11,12 +11,12 @@ integration tests.
 """
 
 from collections.abc import Iterator
-from unittest import mock
 
 import dask.array as da
 import numpy as np
 import pytest
 
+import iris.fileformats.netcdf._bytecoding_datasets as bytecoding_datasets
 import iris.fileformats.netcdf._thread_safe_nc as threadsafe_nc
 from iris.fileformats.netcdf.saver import Saver
 
@@ -24,19 +24,19 @@ from iris.fileformats.netcdf.saver import Saver
 class Test__lazy_stream_data:
     @staticmethod
     @pytest.fixture(autouse=True)
-    def saver_patch():
+    def saver_patch(mocker):
         # Install patches, so we can create a Saver without opening a real output file.
         # Mock just enough of Dataset behaviour to allow a 'Saver.complete()' call.
-        mock_dataset = mock.MagicMock()
-        mock_dataset_class = mock.Mock(return_value=mock_dataset)
+        mock_dataset = mocker.MagicMock()
+        mock_dataset_class = mocker.Mock(return_value=mock_dataset)
         # Mock the wrapper within the netcdf saver
-        target1 = "iris.fileformats.netcdf.saver._thread_safe_nc.DatasetWrapper"
+        target1 = "iris.fileformats.netcdf._bytecoding_datasets.EncodedDataset"
         # Mock the real netCDF4.Dataset within the threadsafe-nc module, as this is
         # used by NetCDFDataProxy and NetCDFWriteProxy.
         target2 = "iris.fileformats.netcdf._thread_safe_nc.netCDF4.Dataset"
-        with mock.patch(target1, mock_dataset_class):
-            with mock.patch(target2, mock_dataset_class):
-                yield
+        mocker.patch(target1, mock_dataset_class)
+        mocker.patch(target2, mock_dataset_class)
+        return
 
     # A fixture to parametrise tests over delayed and non-delayed Saver type.
     # NOTE: this only affects the saver context-exit, which we do not test here, so
@@ -44,31 +44,33 @@ class Test__lazy_stream_data:
     @staticmethod
     @pytest.fixture(params=[False, True], ids=["nocompute", "compute"])
     def compute(request) -> Iterator[bool]:
-        yield request.param
+        return request.param
 
     # A fixture to parametrise tests over real and lazy-type data.
     @staticmethod
     @pytest.fixture(params=["realdata", "lazydata", "emulateddata"])
     def data_form(request) -> Iterator[bool]:
-        yield request.param
+        return request.param
 
     @staticmethod
-    def saver(compute) -> Saver:
+    def saver(compute, data_form, tmp_path) -> Saver:
         # Create a test Saver object
-        return Saver(filename="<dummy>", netcdf_format="NETCDF4", compute=compute)
+        filepath = tmp_path / f"tmp_{compute}_{data_form}.nc"
+        return Saver(filename=filepath, netcdf_format="NETCDF4", compute=compute)
 
     @staticmethod
-    def mock_var(shape, with_data_array):
+    def mock_var(shape, with_data_array, mocker):
         # Create a test cf_var object.
         # N.B. using 'spec=' so we can control whether it has a '_data_array' property.
         if with_data_array:
-            extra_properties = {"_data_array": mock.sentinel.initial_data_array}
+            extra_properties = {"_data_array": mocker.sentinel.initial_data_array}
         else:
             extra_properties = {}
-        mock_cfvar = mock.MagicMock(
+        mock_cfvar = mocker.MagicMock(
             spec=threadsafe_nc.VariableWrapper,
             shape=tuple(shape),
             dtype=np.dtype(np.float32),
+            _contained_instance=mocker.Mock(dtype="f4"),
             **extra_properties,
         )
         # Give the mock cf-var a name property, as required by '_lazy_stream_data'.
@@ -77,16 +79,16 @@ class Test__lazy_stream_data:
         mock_cfvar.name = "<mock_cfvar>"
         return mock_cfvar
 
-    def test_data_save(self, compute, data_form):
+    def test_data_save(self, compute, data_form, mocker, tmp_path):
         """Real data is transferred immediately, lazy data creates a delayed write."""
-        saver = self.saver(compute=compute)
+        saver = self.saver(compute, data_form, tmp_path)
 
         data = np.arange(5.0)
         if data_form == "lazydata":
             data = da.from_array(data)
 
         cf_var = self.mock_var(
-            data.shape, with_data_array=(data_form == "emulateddata")
+            data.shape, with_data_array=(data_form == "emulateddata"), mocker=mocker
         )
         saver._lazy_stream_data(data=data, cf_var=cf_var)
         if data_form == "lazydata":
@@ -111,4 +113,40 @@ class Test__lazy_stream_data:
             cf_var.__setitem__.assert_called_once_with(slice(None), data)
         else:
             assert data_form == "emulateddata"
-            cf_var._data_array == mock.sentinel.exact_data_array
+            cf_var._data_array == mocker.sentinel.exact_data_array
+
+    def test_lazy_data_save_nczarr_uses_preclose_write_list(
+        self, data_form, compute, mocker, tmp_path
+    ):
+        """NCZarr lazy data should not use deferred reopen writes."""
+        saver = self.saver(compute=compute, data_form=data_form, tmp_path=tmp_path)
+        saver._is_nczarr = True
+
+        data = da.from_array(np.arange(5.0))
+        cf_var = self.mock_var(data.shape, with_data_array=False, mocker=mocker)
+
+        saver._lazy_stream_data(data=data, cf_var=cf_var)
+
+        assert len(saver._delayed_writes) == 0
+        assert len(saver._nczarr_writes) == 1
+        result_data, result_target = saver._nczarr_writes[0]
+        assert result_data is data
+        assert result_target is cf_var
+        assert cf_var.__setitem__.call_count == 0
+
+    def test_exit_flushes_nczarr_writes(self, data_form, mocker, tmp_path):
+        """NCZarr lazy writes should be computed before file close in __exit__."""
+        saver = self.saver(compute=False, data_form=data_form, tmp_path=tmp_path)
+        saver._is_nczarr = True
+
+        source = mocker.sentinel.source
+        target = mocker.sentinel.target
+        saver._nczarr_writes.append((source, target))
+
+        store_patch = mocker.patch("iris.fileformats.netcdf.saver.da.store")
+
+        saver.__exit__(None, None, None)
+
+        store_patch.assert_called_once_with([source], [target])
+        saver._dataset.sync.assert_called_once_with()
+        saver._dataset.close.assert_called_once_with()

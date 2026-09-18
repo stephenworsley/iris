@@ -218,6 +218,18 @@ class Constraint:
     def __rand__(self, other):
         return ConstraintCombination(other, self, operator.__and__)
 
+    def __bool__(self):
+        # Constraints have no truth value: combining them with the Python
+        # keywords ``and``/``or``/``not`` (which call bool()) silently returns
+        # one of the operands instead of a combined Constraint, losing the
+        # other. Raise an explanatory error so this is not a silent failure;
+        # use the ``&`` operator to combine constraints. See #4337.
+        raise TypeError(
+            "The truth value of a Constraint is ambiguous. Constraints cannot "
+            "be combined with the 'and', 'or' and 'not' keywords; use the '&' "
+            "operator instead, e.g. 'constraint1 & constraint2'."
+        )
+
 
 class ConstraintCombination(Constraint):
     """Represents the binary combination of two Constraint instances."""
@@ -531,6 +543,8 @@ class AttributeConstraint(Constraint):
         super().__init__(cube_func=self._cube_func)
 
     def __eq__(self, other):
+        # Note: equality means that NumPy arrays are not supported for
+        #  AttributeConstraints (get the truth ambiguity error).
         eq = (
             isinstance(other, AttributeConstraint)
             and self._attributes == other._attributes
@@ -553,6 +567,8 @@ class AttributeConstraint(Constraint):
                         match = False
                         break
                 else:
+                    # Note: equality means that NumPy arrays are not supported
+                    #  for AttributeConstraints (get the truth ambiguity error).
                     if cube_attr != value:
                         match = False
                         break
@@ -599,16 +615,16 @@ class NameConstraint(Constraint):
             A string or callable representing the UM STASH code to match
             against.
 
+        Returns
+        -------
+        bool
+
         Notes
         -----
         The default value of each of the keyword arguments is the string
         "none", rather than the singleton None, as None may be a legitimate
         value to be matched against e.g., to constrain against all cubes
         where the standard_name is not set, then use standard_name=None.
-
-        Returns
-        -------
-        bool
 
         Examples
         --------

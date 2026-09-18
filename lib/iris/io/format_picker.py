@@ -4,6 +4,11 @@
 # See LICENSE in the root of the repository for full licensing details.
 """Provide convenient file format identification.
 
+.. z_reference:: iris.io.format_picker
+   :tags: topic_load_save
+
+   API reference
+
 A module to provide convenient file format identification through a combination
 of filename extension and file based *magic* numbers.
 
@@ -43,7 +48,7 @@ original specification and can be customised to your project's needs.
 
 from collections.abc import Callable
 import functools
-import os
+from pathlib import Path
 import struct
 
 
@@ -343,7 +348,7 @@ class FileExtension(FileElement):
 
     def get_element(self, basename, file_handle):
         # noqa D102
-        return os.path.splitext(basename)[1]
+        return Path(basename).suffix
 
 
 class LeadingLine(FileElement):
@@ -355,9 +360,9 @@ class LeadingLine(FileElement):
 
 
 class UriProtocol(FileElement):
-    """Return the scheme and part from a URI, using :func:`~iris.io.decode_uri`.
+    """Return URI decode parts, using :func:`~iris.io.decode_uri`.
 
-    A :class:`FileElement` that returns the "scheme" and "part" from a URI,
+    A :class:`FileElement` that returns the "scheme", "part" and "fragment" from a URI,
     using :func:`~iris.io.decode_uri`.
 
     """
@@ -369,7 +374,7 @@ class UriProtocol(FileElement):
         # noqa: D102
         from iris.io import decode_uri
 
-        return decode_uri(basename)[0]
+        return decode_uri(basename)
 
 
 class DataSourceObjectProtocol(FileElement):

@@ -3,10 +3,6 @@
 # This file is part of Iris and is released under the BSD license.
 # See LICENSE in the root of the repository for full licensing details.
 
-# import iris.tests first so that some things can be initialised before
-# importing anything else
-import iris.tests as tests  # isort:skip
-
 import ast
 from datetime import datetime
 from fnmatch import fnmatch
@@ -14,11 +10,14 @@ from glob import glob
 import os
 from pathlib import Path
 import subprocess
-from typing import List, Tuple
+from typing import Iterator, List, Tuple, cast
+
+from packaging.version import Version
+import pytest
 
 import iris
-from iris.fileformats.netcdf import _thread_safe_nc
 from iris.tests import system_test
+from iris.tests.unit.fileformats.netcdf import test_bytecoding_datasets
 
 LICENSE_TEMPLATE = """# Copyright Iris contributors
 #
@@ -27,15 +26,14 @@ LICENSE_TEMPLATE = """# Copyright Iris contributors
 
 # Guess iris repo directory of Iris - realpath is used to mitigate against
 # Python finding the iris package via a symlink.
-IRIS_DIR = os.path.realpath(os.path.dirname(iris.__file__))
-IRIS_INSTALL_DIR = os.path.dirname(os.path.dirname(IRIS_DIR))
-DOCS_DIR = os.path.join(IRIS_INSTALL_DIR, "docs", "iris")
-DOCS_DIR = iris.config.get_option("Resources", "doc_dir", default=DOCS_DIR)
+IRIS_DIR = Path(iris.__file__).parent.resolve()
+IRIS_INSTALL_DIR = Path(IRIS_DIR).parent.parent
+DOCS_DIR = Path(IRIS_INSTALL_DIR) / "docs" / "iris"
+DOCS_DIR = iris.config.get_option("Resources", "doc_dir", default=str(DOCS_DIR))
 exclusion = ["Makefile", "build"]
-DOCS_DIRS = glob(os.path.join(DOCS_DIR, "*"))
-DOCS_DIRS = [
-    DOC_DIR for DOC_DIR in DOCS_DIRS if os.path.basename(DOC_DIR) not in exclusion
-]
+DOCS_DIRS = glob(str(Path(DOCS_DIR) / "*"))
+DOCS_DIRS = [DOC_DIR for DOC_DIR in DOCS_DIRS if Path(DOC_DIR).name not in exclusion]
+
 # Get a dirpath to the git repository : allow setting with an environment
 # variable, so Travis can test for headers in the repo, not the installation.
 IRIS_REPO_DIRPATH = os.environ.get("IRIS_REPO_DIR", IRIS_INSTALL_DIR)
@@ -46,6 +44,9 @@ def test_netcdf4_import():
     # Please avoid including these phrases in any comments/strings throughout
     #  Iris (e.g. use "from the netCDF4 library" instead) - this allows the
     #  below search to remain quick and simple.
+    from iris.fileformats.netcdf import _thread_safe_nc
+    from iris.tests.unit.fileformats.netcdf._thread_safe_nc import test_NetCDFWriteProxy
+
     import_strings = ("import netCDF4", "from netCDF4")
 
     files_including_import = []
@@ -57,20 +58,23 @@ def test_netcdf4_import():
 
     expected = [
         Path(_thread_safe_nc.__file__),
+        Path(test_NetCDFWriteProxy.__file__),
         Path(system_test.__file__),
         Path(__file__),
+        Path(test_bytecoding_datasets.__file__),
     ]
     assert set(files_including_import) == set(expected)
 
 
-def test_python_versions():
+def test_python_versions() -> None:
     """Test Python Versions.
 
     Test is designed to fail whenever Iris' supported Python versions are
     updated, insisting that versions are updated EVERYWHERE in-sync.
     """
-    latest_supported = "3.12"
-    all_supported = ["3.10", "3.11", latest_supported]
+    all_supported = ["3.12", "3.13", "3.14"]
+    _parsed = [Version(v) for v in all_supported]
+    latest_supported = str(max(_parsed))
 
     root_dir = Path(__file__).parents[3]
     workflows_dir = root_dir / ".github" / "workflows"
@@ -82,7 +86,6 @@ def test_python_versions():
     nox_file = root_dir / "noxfile.py"
     ci_wheels_file = workflows_dir / "ci-wheels.yml"
     ci_tests_file = workflows_dir / "ci-tests.yml"
-    asv_config_file = benchmarks_dir / "asv.conf.json"
     benchmark_runner_file = benchmarks_dir / "bm_runner.py"
 
     text_searches: List[Tuple[Path, str]] = [
@@ -104,10 +107,9 @@ def test_python_versions():
             ci_tests_file,
             (
                 f'python-version: ["{latest_supported}"]\n'
-                f'{" " * 8}session: ["doctest", "gallery", "linkcheck"]'
+                f'{" " * 8}session: ["doctest", "gallery"]'
             ),
         ),
-        (asv_config_file, f"PY_VER={latest_supported}"),
         (benchmark_runner_file, f'python_version = "{latest_supported}"'),
     ]
 
@@ -126,7 +128,7 @@ def test_python_versions():
         assert search in path.read_text()
 
 
-def test_categorised_warnings():
+def test_categorised_warnings() -> None:
     r"""To ensure that all UserWarnings raised by Iris are categorised, for ease of use.
 
     No obvious category? Use the parent:
@@ -151,8 +153,13 @@ def test_categorised_warnings():
     for file_path in Path(IRIS_DIR).rglob("*.py"):
         file_text = file_path.read_text()
         parsed = ast.parse(source=file_text)
-        calls = filter(lambda node: hasattr(node, "func"), ast.walk(parsed))
-        warn_calls = filter(lambda c: getattr(c.func, "attr", None) == "warn", calls)
+        calls: Iterator[ast.Call] = cast(
+            "Iterator[ast.Call]",
+            filter(lambda node: hasattr(node, "func"), ast.walk(parsed)),
+        )
+        warn_calls: Iterator[ast.Call] = filter(
+            lambda c: getattr(c.func, "attr", None) == "warn", calls
+        )
 
         warn_call: ast.Call
         for warn_call in warn_calls:
@@ -160,7 +167,7 @@ def test_categorised_warnings():
             tmp_list.append(warn_ref)
 
             category_kwargs = filter(lambda k: k.arg == "category", warn_call.keywords)
-            category_kwarg: ast.keyword = next(category_kwargs, None)
+            category_kwarg: ast.keyword | None = next(category_kwargs, None)
 
             if category_kwarg is None:
                 warns_without_category.append(warn_ref)
@@ -172,16 +179,16 @@ def test_categorised_warnings():
                 warns_with_user_warning.append(warn_ref)
 
     # This avoids UserWarnings being raised by unwritten default behaviour.
-    assert (
-        warns_without_category == []
-    ), "All warnings raised by Iris must be raised with the category kwarg."
+    assert warns_without_category == [], (
+        "All warnings raised by Iris must be raised with the category kwarg."
+    )
 
-    assert (
-        warns_with_user_warning == []
-    ), "No warnings raised by Iris can be the base UserWarning class."
+    assert warns_with_user_warning == [], (
+        "No warnings raised by Iris can be the base UserWarning class."
+    )
 
 
-class TestLicenseHeaders(tests.IrisTest):
+class TestLicenseHeaders:
     @staticmethod
     def whatchanged_parse(whatchanged_output):
         r"""Returns a generator of tuples of data parsed from
@@ -219,14 +226,15 @@ class TestLicenseHeaders(tests.IrisTest):
 
         """
         # Check the ".git" folder exists at the repo dir.
-        if not os.path.isdir(os.path.join(IRIS_REPO_DIRPATH, ".git")):
+        if not (Path(IRIS_REPO_DIRPATH) / ".git").is_dir():
             msg = "{} is not a git repository."
             raise ValueError(msg.format(IRIS_REPO_DIRPATH))
 
-        # Call "git whatchanged" to get the details of all the files and when
+        # Call "git log" to get the details of all the files and when
         # they were last changed.
         output = subprocess.check_output(
-            ["git", "whatchanged", "--pretty=TIME:%ct"], cwd=IRIS_REPO_DIRPATH
+            ["git", "log", "--name-status", "--pretty=TIME:%ct"],
+            cwd=IRIS_REPO_DIRPATH,
         )
 
         output = output.decode().split("\n")
@@ -245,8 +253,8 @@ class TestLicenseHeaders(tests.IrisTest):
             "dist/*",
             "docs/gallery_code/*/*.py",
             "docs/src/developers_guide/documenting/*.py",
-            "docs/src/userguide/plotting_examples/*.py",
-            "docs/src/userguide/regridding_plots/*.py",
+            "docs/src/user_manual/tutorial/plotting_examples/*.py",
+            "docs/src/user_manual/tutorial/regridding_plots/*.py",
             "docs/src/_build/*",
             "lib/iris/analysis/_scipy_interpolate.py",
         )
@@ -256,14 +264,17 @@ class TestLicenseHeaders(tests.IrisTest):
         except ValueError as err:
             # Caught the case where this is not a git repo.
             msg = "Iris installation did not look like a git repo?\nERR = {}\n\n"
-            return self.skipTest(msg.format(str(err)))
+            return pytest.skip(msg.format(str(err)))
 
         failed = False
         for fname, last_change in sorted(last_change_by_fname.items()):
-            full_fname = os.path.join(IRIS_REPO_DIRPATH, fname)
+            full_fname = Path(IRIS_REPO_DIRPATH) / fname
+            is_file = full_fname.is_file()
+            full_fname = str(full_fname)
+
             if (
                 full_fname.endswith(".py")
-                and os.path.isfile(full_fname)
+                and is_file
                 and not any(fnmatch(fname, pat) for pat in exclude_patterns)
             ):
                 with open(full_fname) as fh:
@@ -282,7 +293,3 @@ class TestLicenseHeaders(tests.IrisTest):
 
         if failed:
             raise ValueError("There were license header failures. See stdout.")
-
-
-if __name__ == "__main__":
-    tests.main()

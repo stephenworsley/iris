@@ -4,6 +4,11 @@
 # See LICENSE in the root of the repository for full licensing details.
 """Support loading Iris cubes from NetCDF files using the CF conventions for metadata interpretation.
 
+.. z_reference:: iris.fileformats.netcdf.loader
+   :tags: topic_load_save
+
+   API reference
+
 See : `NetCDF User's Guide <https://docs.unidata.ucar.edu/nug/current/>`_
 and `netCDF4 python module <https://github.com/Unidata/netcdf4-python>`_.
 
@@ -15,6 +20,7 @@ from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from copy import deepcopy
 from enum import Enum, auto
+from functools import partial
 import threading
 import warnings
 
@@ -35,7 +41,7 @@ import iris.config
 import iris.coord_systems
 import iris.coords
 import iris.fileformats.cf
-from iris.fileformats.netcdf import _thread_safe_nc
+from iris.fileformats.netcdf import _bytecoding_datasets, _thread_safe_nc
 from iris.fileformats.netcdf.saver import _CF_ATTRS
 import iris.io
 import iris.util
@@ -49,7 +55,11 @@ from . import logger
 
 # An expected part of the public loader API, but includes thread safety
 #  concerns so is housed in _thread_safe_nc.
-NetCDFDataProxy = _thread_safe_nc.NetCDFDataProxy
+# NOTE: this is the *default*, as required for public legacy api
+#  - in practice, when creating our proxies we dynamically choose between this and
+#    :class:`_thread_safe_nc.DatasetWrapper`, depending on
+#    :data:`_bytecoding_datasets.DECODE_TO_STRINGS_ON_READ`
+NetCDFDataProxy = _bytecoding_datasets.EncodedNetCDFDataProxy
 
 
 class _WarnComboIgnoringBoundsLoad(
@@ -78,6 +88,12 @@ def _assert_case_specific_facts(engine, cf, cf_group):
     engine.cube_parts["coordinates"] = []
     engine.cube_parts["cell_measures"] = []
     engine.cube_parts["ancillary_variables"] = []
+    engine.cube_parts["coordinate_systems"] = {}
+
+    # Add the parsed coordinate reference system mappings
+    engine.cube_parts["coordinate_system_mappings"] = cf._coord_system_mappings.get(
+        engine.cf_var.cf_name, None
+    )
 
     # Assert facts for CF coordinates.
     for cf_name in cf_group.coordinates.keys():
@@ -165,6 +181,8 @@ def _add_unused_attributes(iris_object, cf_var):
     reserved terms.
 
     """
+    from iris.fileformats._nc_load_rules.helpers import _add_or_capture
+    from iris.loading import LoadProblems
 
     def attribute_predicate(item):
         return item[0] not in _CF_ATTRS
@@ -175,8 +193,18 @@ def _add_unused_attributes(iris_object, cf_var):
         # Treat cube attributes (i.e. a CubeAttrsDict) as a special case.
         # These attrs are "local" (i.e. on the variable), so record them as such.
         attrs_dict = attrs_dict.locals
+
     for attr_name, attr_value in tmpvar:
-        _set_attributes(attrs_dict, attr_name, attr_value)
+        _ = _add_or_capture(
+            build_func=partial(lambda: attr_value),
+            add_method=partial(_set_attributes, attrs_dict, attr_name),
+            cf_var=cf_var,
+            attr_key=attr_name,
+            destination=LoadProblems.Problem.Destination(
+                iris_class=iris_object.__class__,
+                identifier=cf_var.cf_name,
+            ),
+        )
 
 
 def _get_actual_dtype(cf_var):
@@ -196,8 +224,13 @@ def _get_actual_dtype(cf_var):
 # mostly done for speed improvement.  See https://github.com/SciTools/iris/pull/5069
 _LAZYVAR_MIN_BYTES = 5000
 
+# A stab in the dark at the mean length of the "ragged dimension" for netCDF "variable
+# length arrays" (`NetCDF.VLType` type). Total array size is unknown until the variable is
+# read in. Making this number bigger makes it more likely an array will be loaded lazily.
+_MEAN_VL_ARRAY_LEN = 10
 
-def _get_cf_var_data(cf_var, filename):
+
+def _get_cf_var_data(cf_var):
     """Get an array representing the data of a CF variable.
 
     This is typically a lazy array based around a NetCDFDataProxy, but if the variable
@@ -206,7 +239,6 @@ def _get_cf_var_data(cf_var, filename):
     unnecessarily slow + wasteful of memory.
 
     """
-    global CHUNK_CONTROL
     if hasattr(cf_var, "_data_array"):
         # The variable is not an actual netCDF4 file variable, but an emulating
         # object with an attached data array (either numpy or dask), which can be
@@ -215,12 +247,48 @@ def _get_cf_var_data(cf_var, filename):
         # See https://github.com/SciTools/iris/issues/4994 "Xarray bridge".
         result = cf_var._data_array
     else:
-        total_bytes = cf_var.size * cf_var.dtype.itemsize
+        # Determine size of data; however can't do this for variable length (VLEN)
+        # netCDF arrays as the size of the array can only be known by reading the
+        # data; see https://github.com/Unidata/netcdf-c/issues/1893.
+        # Note: "Variable length" netCDF types have a datatype of `nc.VLType`.
+        if isinstance(getattr(cf_var, "datatype", None), _thread_safe_nc.VLType):
+            msg = (
+                f"NetCDF variable `{cf_var.cf_name}` is a variable length type of kind {cf_var.dtype} "
+                "thus the total data size cannot be known in advance. This may affect the lazy loading "
+                "of the data."
+            )
+            warnings.warn(msg, category=iris.warnings.IrisLoadWarning)
+
+            # Give user the chance to pass a hint of the average variable length array size via
+            # the chunk control context manager. This allows for better decisions to be made on
+            # whether the data should be lazy-loaded or not.
+            mean_vl_array_len = _MEAN_VL_ARRAY_LEN
+            if CHUNK_CONTROL.mode is not CHUNK_CONTROL.Modes.AS_DASK:
+                if chunks := CHUNK_CONTROL.var_dim_chunksizes.get(cf_var.cf_name):
+                    if vl_chunk_hint := chunks.get("_vl_hint"):
+                        mean_vl_array_len = vl_chunk_hint
+
+            # Special handling for strings (`str` type) as these don't have an itemsize attribute;
+            # assume 4 bytes which is sufficient for unicode character storage
+            itemsize = 4 if cf_var.dtype is str else cf_var.dtype.itemsize
+
+            # For `VLType` cf_var.size will just return the known dimension size.
+            total_bytes = cf_var.size * mean_vl_array_len * itemsize
+        else:
+            # Normal NCVariable type:
+            total_bytes = cf_var.size * cf_var.dtype.itemsize
+
         if total_bytes < _LAZYVAR_MIN_BYTES:
             # Don't make a lazy array, as it will cost more memory AND more time to access.
-            # Instead fetch the data immediately, as a real array, and return that.
             result = cf_var[:]
 
+            # Special handling of masked scalar value; this will be returned as
+            # an `np.ma.masked` instance which will lose the original dtype.
+            # Workaround for this it return a 1-element masked array of the
+            # correct dtype. Note: this is not an issue for masked arrays,
+            # only masked scalar values.
+            if result is np.ma.masked:
+                result = np.ma.masked_all(1, dtype=cf_var.dtype)
         else:
             # Get lazy chunked data out of a cf variable.
             # Creates Dask wrappers around data arrays for any cube components which
@@ -228,14 +296,29 @@ def _get_cf_var_data(cf_var, filename):
             dtype = _get_actual_dtype(cf_var)
 
             # Make a data-proxy that mimics array access and can fetch from the file.
-            fill_value = getattr(
-                cf_var.cf_data,
-                "_FillValue",
-                _thread_safe_nc.default_fillvals[cf_var.dtype.str[1:]],
-            )
-            proxy = NetCDFDataProxy(
-                cf_var.shape, dtype, filename, cf_var.cf_name, fill_value
-            )
+            # Note: Special handling needed for "variable length string" types which
+            # return a dtype of `str`, rather than a numpy type; use `S1` in this case.
+            if getattr(cf_var.dtype, "kind", None) == "U":
+                # Special handling for "string variables".
+                fill_value = ""
+            else:
+                fill_dtype = "S1" if cf_var.dtype is str else cf_var.dtype.str[1:]
+                fill_value = getattr(
+                    cf_var.cf_data,
+                    "_FillValue",
+                    _thread_safe_nc.default_fillvals[fill_dtype],
+                )
+
+            # Switch type of proxy, based on type of variable.
+            # It is done this way, instead of using an instance variable, because the
+            #  limited nature of the wrappers makes a stateful choice awkward,
+            #  e.g. especially, "variable.group()" is *not* the parent DatasetWrapper.
+            if isinstance(cf_var.cf_data, _bytecoding_datasets.EncodedVariable):
+                proxy_class = _bytecoding_datasets.EncodedNetCDFDataProxy
+            else:
+                proxy_class = _thread_safe_nc.NetCDFDataProxy
+
+            proxy = proxy_class(cf_var.cf_data, dtype, cf_var.filename, fill_value)
             # Get the chunking specified for the variable : this is either a shape, or
             # maybe the string "contiguous".
             if CHUNK_CONTROL.mode is ChunkControl.Modes.AS_DASK:
@@ -317,8 +400,6 @@ class _OrderedAddableList(list):
 
 
 def _load_cube(engine, cf, cf_var, filename):
-    global CHUNK_CONTROL
-
     # Translate dimension chunk-settings specific to this cube (i.e. named by
     # it's data-var) into global ones, for the duration of this load.
     # Thus, by default, we will create any AuxCoords, CellMeasures et al with
@@ -332,8 +413,17 @@ def _load_cube_inner(engine, cf, cf_var, filename):
     from iris.cube import Cube
 
     """Create the cube associated with the CF-netCDF data variable."""
-    data = _get_cf_var_data(cf_var, filename)
-    cube = Cube(data)
+    from iris.fileformats.netcdf.saver import Saver
+
+    if hasattr(cf_var, Saver._DATALESS_ATTRNAME):
+        # This data-variable represents a dataless cube.
+        # The variable array content was never written (to take up no space).
+        data = None
+        shape = cf_var.shape
+    else:
+        data = _get_cf_var_data(cf_var)
+        shape = None
+    cube = Cube(data=data, shape=shape)
 
     # Reset the actions engine.
     engine.reset()
@@ -390,6 +480,13 @@ def _load_cube_inner(engine, cf, cf_var, filename):
         )
         for method in cube.cell_methods
     ]
+
+    # Set extended_grid_mapping property ONLY if extended grid_mapping was used.
+    # This avoids having an unnecessary `iris_extended_grid_mapping` attribute entry.
+    if cs_mappings := engine.cube_parts.get("coordinate_system_mappings", None):
+        # `None` as a mapping key implies simple mapping syntax (single coord system)
+        if None not in cs_mappings:
+            cube.extended_grid_mapping = True
 
     if DEBUG:
         # Show activation statistics for this data-var (i.e. cube).
@@ -525,24 +622,26 @@ def _translate_constraints_to_var_callback(constraints):
 
     Notes
     -----
-    For now, ONLY handles a single NameConstraint with no 'STASH' component.
+    For now, ONLY handles NameConstraints with no 'STASH' component.
 
     """
     import iris._constraints
 
     constraints = iris._constraints.list_of_constraints(constraints)
-    result = None
-    if len(constraints) == 1:
-        (constraint,) = constraints
-        if (
-            isinstance(constraint, iris._constraints.NameConstraint)
-            and constraint.STASH == "none"
-        ):
-            # As long as it doesn't use a STASH match, then we can treat it as
-            # a testing against name properties of cf_var.
-            # That's just like testing against name properties of a cube, except that they may not all exist.
-            def inner(cf_datavar):
-                match = True
+    if len(constraints) == 0 or not all(
+        isinstance(constraint, iris._constraints.NameConstraint)
+        and constraint.STASH == "none"
+        for constraint in constraints
+    ):
+        # We can define a var-filtering function to speedup the load, *ONLY* when we
+        #  have some constraints, and all are simple NameConstraints with no STASH.
+        result = None
+    else:
+
+        def inner(cf_datavar):
+            match_any_constraint = False
+            for constraint in constraints:
+                match_this_constraint = True
                 for name in constraint._names:
                     expected = getattr(constraint, name)
                     if name != "STASH" and expected != "none":
@@ -553,21 +652,30 @@ def _translate_constraints_to_var_callback(constraints):
                             continue
                         actual = getattr(cf_datavar, attr_name, "")
                         if actual != expected:
-                            match = False
+                            match_this_constraint = False
                             break
-                return match
+                if match_this_constraint:
+                    match_any_constraint = True
+                    break
+            return match_any_constraint
 
-            result = inner
+        result = inner
     return result
 
 
 def load_cubes(file_sources, callback=None, constraints=None):
     """Load cubes from a list of NetCDF filenames/OPeNDAP URLs.
 
+    Also supports Zarr files in the NcZarr URL format, e.g.
+    ``file:///path/to/file#mode=nczarr,file``. Note that NcZarr is limited to
+    Zarr Storage Specification version 2. See the
+    `NcZarr docs <https://docs.unidata.ucar.edu/nug/current/nczarr_head.html>`
+    for more.
+
     Parameters
     ----------
     file_sources : str or list
-        One or more NetCDF filenames/OPeNDAP URLs to load from.
+        One or more NetCDF filenames/OPeNDAP URLs/NcZarr URLs to load from.
         OR open datasets.
     callback : function, optional
         Function which can be passed on to :func:`iris.io.run_callback`.
@@ -575,12 +683,15 @@ def load_cubes(file_sources, callback=None, constraints=None):
 
     Returns
     -------
-    Generator of loaded NetCDF :class:`iris.cube.Cube`.
+    Generator of loaded NetCDF/NcZarr :class:`iris.cube.Cube`.
 
     """
     # Deferred import to avoid circular imports.
+    from iris.cube import Cube
+    from iris.fileformats._nc_load_rules.helpers import _add_or_capture
     from iris.fileformats.cf import CFReader
     from iris.io import run_callback
+    from iris.loading import LoadProblems
 
     from .ugrid_load import (
         _build_mesh_coords,
@@ -623,18 +734,52 @@ def load_cubes(file_sources, callback=None, constraints=None):
                         mesh = meshes[mesh_name]
                     except KeyError:
                         message = (
-                            f"File does not contain mesh: '{mesh_name}' - "
-                            f"referenced by variable: '{cf_var.cf_name}' ."
+                            f"Mesh '{mesh_name}' - "
+                            f"referenced by variable: '{cf_var.cf_name}' - "
+                            "could not be found in file."
                         )
                         logger.debug(message)
+
                 if mesh is not None:
-                    mesh_coords, mesh_dim = _build_mesh_coords(mesh, cf_var)
+                    # Unconventional 'split' usage of _add_or_capture -
+                    #  attribute handling means MeshCoords need to be built
+                    #  BEFORE loading the Cube.
+                    capture_kwargs = dict(
+                        cf_var=cf.cf_group.meshes[mesh_name],
+                        # MeshCoords are an Iris concept; the best fallback we
+                        #  have is to capture the CF Mesh.
+                        destination=LoadProblems.Problem.Destination(
+                            iris_class=Cube,
+                            identifier=cf_var.cf_name,
+                        ),
+                    )
+
+                    def _build_mesh_coords_inner():
+                        nonlocal mesh_coords
+                        nonlocal mesh_dim
+                        mesh_coords, mesh_dim = _build_mesh_coords(mesh, cf_var)
+
+                    def _add_mesh_coords(coords_and_dim):
+                        coords, dim = coords_and_dim
+                        for coord in coords:
+                            cube.add_aux_coord(coord, dim)
+
+                    # MeshCoords part 1.
+                    _ = _add_or_capture(
+                        build_func=partial(_build_mesh_coords_inner),
+                        add_method=partial(lambda built: None),
+                        **capture_kwargs,
+                    )
 
                 cube = _load_cube(engine, cf, cf_var, cf.filename)
 
-                # Attach the mesh (if present) to the cube.
-                for mesh_coord in mesh_coords:
-                    cube.add_aux_coord(mesh_coord, mesh_dim)
+                if mesh is not None:
+                    # MeshCoords part 2.
+                    _ = _add_or_capture(
+                        build_func=partial(lambda: (mesh_coords, mesh_dim)),
+                        add_method=partial(_add_mesh_coords),
+                        **capture_kwargs,
+                    )
 
                 # Process any associated formula terms and attach
                 # the corresponding AuxCoordFactory.
@@ -699,6 +844,10 @@ class ChunkControl(threading.local):
     ) -> Iterator[None]:
         r"""Control the Dask chunk sizes applied to NetCDF variables during loading.
 
+        This function can also be used to provide a size hint for the unknown
+        array lengths when loading "variable-length" NetCDF data types.
+        See https://unidata.github.io/netcdf4-python/#netCDF4.Dataset.vltypes
+
         Parameters
         ----------
         var_names : str or list of str, default=None
@@ -710,7 +859,8 @@ class ChunkControl(threading.local):
             Each key-value pair defines a chunk size for a named file
             dimension, e.g. ``{'time': 10, 'model_levels':1}``.
             Values of ``-1`` will lock the chunk size to the full size of that
-            dimension.
+            dimension. To specify a size hint for "variable-length"  data types
+            use the special name `_vl_hint`.
 
         Notes
         -----
@@ -734,6 +884,16 @@ class ChunkControl(threading.local):
         i.e. the setting configured by
         ``dask.config.set({'array.chunk-size': '250MiB'})``.
 
+        For variable-length data types the size of the variable (or "ragged")
+        dimension of the individual array elements cannot be known without
+        reading the data. This can make it difficult for Iris to determine
+        whether to load the data lazily or not. If the user has some apriori
+        knowledge of the mean variable array length this can be passed as
+        as a size hint via the special `_vl_hint` name. For example a hint
+        that variable-length string array that contains 4 character experiment
+        identifiers:
+        ``CHUNK_CONTROL.set("expver", _vl_hint=4)``
+
         """
         old_mode = self.mode
         old_var_dim_chunksizes = deepcopy(self.var_dim_chunksizes)
@@ -754,7 +914,7 @@ class ChunkControl(threading.local):
                     raise ValueError(msg)
                 dim_chunks = self.var_dim_chunksizes.setdefault(var_name, {})
                 for dim_name, chunksize in dimension_chunksizes.items():
-                    if not (isinstance(dim_name, str) and isinstance(chunksize, int)):
+                    if not (isinstance(dim_name, str) and isinstance(chunksize, int)):  # type: ignore[redundant-expr]
                         msg = (
                             "'dimension_chunksizes' kwargs should be a dict "
                             f"of `str: int` pairs, not {dimension_chunksizes!r}."

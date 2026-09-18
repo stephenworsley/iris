@@ -2,15 +2,22 @@
 #
 # This file is part of Iris and is released under the BSD license.
 # See LICENSE in the root of the repository for full licensing details.
-"""Definitions of coordinates and other dimensional metadata."""
+"""Definitions of coordinates and other dimensional metadata.
+
+.. z_reference:: iris.coords
+   :tags: topic_data_model
+
+   API reference
+"""
 
 from abc import ABCMeta, abstractmethod
 from collections import namedtuple
-from collections.abc import Container
+from collections.abc import Container, Iterator
 import copy
 from functools import lru_cache
 from itertools import zip_longest
 import operator
+from typing import cast
 import warnings
 import zlib
 
@@ -32,10 +39,62 @@ from iris.common import (
 import iris.exceptions
 import iris.time
 import iris.util
+from iris.util import CML_SETTINGS
 import iris.warnings
 
 #: The default value for ignore_axis which controls guess_coord_axis' behaviour
 DEFAULT_IGNORE_AXIS = False
+
+
+class PointBoundStrings:
+    """Class for representing formatted string arrays of points and bounds."""
+
+    def __init__(self, core_points, core_bounds, units, fmt=None):
+        """Construct an object for formatting points and bounds as string arrays."""
+        self._core_points = core_points
+        self._core_bounds = core_bounds
+        self._units = units
+        self._points = None
+        self._bounds = None
+        self.fmt = fmt
+
+    @property
+    def points(self):
+        """Format the points as a string array."""
+        if self._points is None:
+            points = _lazy.as_concrete_data(self._core_points)
+            if self._units.is_time_reference():
+                points = self._units.num2date(points)
+            if self.fmt:
+                self._points = np.vectorize(lambda x: format(x, self.fmt))(points)
+            else:
+                self._points = points.astype("str")
+            self._core_points = None
+        return self._points
+
+    @property
+    def bounds(self):
+        """Format the bounds as a string array."""
+        if self._bounds is None:
+            if self._core_bounds is not None:
+                bounds = _lazy.as_concrete_data(self._core_bounds)
+                if self._units.is_time_reference():
+                    bounds = self._units.num2date(bounds)
+                if self.fmt:
+                    self._bounds = np.vectorize(lambda x: format(x, self.fmt))(bounds)
+                else:
+                    self._bounds = bounds.astype("str")
+                self._core_bounds = None
+        return self._bounds
+
+    def __str__(self):
+        """Format the points and bounds as a string."""
+        output = ["Points:", np.array2string(self.points)]
+        if self.bounds is not None:
+            output.extend(["Bounds:", np.array2string(self.bounds)])
+        else:
+            output.extend(["Bounds:", "None"])
+        return "\n".join(output)
 
 
 class _DimensionalMetadata(CFVariableMixin, metaclass=ABCMeta):
@@ -97,6 +156,8 @@ class _DimensionalMetadata(CFVariableMixin, metaclass=ABCMeta):
         # Configure the metadata manager.
         if not hasattr(self, "_metadata_manager"):
             self._metadata_manager = metadata_manager_factory(BaseMetadata)
+
+        self._mesh_timestamps = []
 
         #: CF standard name of the quantity that the metadata represents.
         self.standard_name = standard_name
@@ -217,7 +278,18 @@ class _DimensionalMetadata(CFVariableMixin, metaclass=ABCMeta):
     @property
     def _values(self):
         """The _DimensionalMetadata values as a NumPy array."""
-        return self._values_dm.data.view()
+
+        def data_id():
+            return id(self._values_dm.core_data())
+
+        original_id = data_id()
+        result = self._values_dm.data.view()
+        if data_id() != original_id:
+            # Realisation has occurred - potential effect on deferred mesh computations
+            #  (MeshCoord, _MeshIndexSet).
+            for timestamp in self._mesh_timestamps:
+                timestamp.update()
+        return result
 
     @_values.setter
     def _values(self, values):
@@ -259,7 +331,7 @@ class _DimensionalMetadata(CFVariableMixin, metaclass=ABCMeta):
         precision=None,
         convert_dates=True,
         _section_indices=None,
-    ):
+    ) -> str:
         r"""Make a printable text summary.
 
         Parameters
@@ -346,8 +418,9 @@ class _DimensionalMetadata(CFVariableMixin, metaclass=ABCMeta):
 
             if data.dtype.kind == "U":
                 # Strings : N.B. includes all missing data
-                # find the longest.
-                length = max(len(str(x)) for x in data.flatten())
+                # find the longest (an empty array, e.g. a length-0 time
+                # coordinate, has no elements, so fall back to 0). See #6531.
+                length = max((len(str(x)) for x in data.flatten()), default=0)
                 # Pre-apply a common formatting width.
                 formatter = {"all": lambda x: str(x).ljust(length)}
 
@@ -548,6 +621,7 @@ class _DimensionalMetadata(CFVariableMixin, metaclass=ABCMeta):
                     show = val is not None and val is not False
                 if show:
                     if name == "attributes":
+                        val = cast("dict", val)
                         # Use a multi-line form for this.
                         add_output(newline_indent)
                         add_output("attributes:", section="attributes")
@@ -569,6 +643,13 @@ class _DimensionalMetadata(CFVariableMixin, metaclass=ABCMeta):
 
         return "\n".join(output_lines)
 
+    def __setattr__(self, key, value):
+        if getattr(self, "_mesh_timestamps", None) is not None:
+            if key in ("points", "bounds", "_values", "indices"):
+                for timestamp in self._mesh_timestamps:
+                    timestamp.update()
+        object.__setattr__(self, key, value)
+
     def __str__(self):
         return self.summary()
 
@@ -589,21 +670,22 @@ class _DimensionalMetadata(CFVariableMixin, metaclass=ABCMeta):
         if hasattr(other, "metadata"):
             # metadata comparison
             eq = self.metadata == other.metadata
+
+            # Also consider bounds, if we have them.
+            # (N.B. though only Coords can ever actually *have* bounds).
+            if eq and eq is not NotImplemented:
+                eq = self.has_bounds() is other.has_bounds()
+
             # data values comparison
             if eq and eq is not NotImplemented:
                 eq = iris.util.array_equal(
                     self._core_values(), other._core_values(), withnans=True
                 )
-
-            # Also consider bounds, if we have them.
-            # (N.B. though only Coords can ever actually *have* bounds).
             if eq and eq is not NotImplemented:
                 if self.has_bounds() and other.has_bounds():
                     eq = iris.util.array_equal(
                         self.core_bounds(), other.core_bounds(), withnans=True
                     )
-                else:
-                    eq = not self.has_bounds() and not other.has_bounds()
 
         return eq
 
@@ -746,6 +828,9 @@ class _DimensionalMetadata(CFVariableMixin, metaclass=ABCMeta):
             else:
                 new_bounds = self.units.convert(self.bounds, unit)
             self.bounds = new_bounds
+        for key in "actual_range", "valid_max", "valid_min", "valid_range":
+            if key in self.attributes:
+                self.attributes[key] = self.units.convert(self.attributes[key], unit)
         self.units = unit
 
     def is_compatible(self, other, ignore=None):
@@ -759,7 +844,9 @@ class _DimensionalMetadata(CFVariableMixin, metaclass=ABCMeta):
                     ignore = (ignore,)
                 common_keys = common_keys.difference(ignore)
             for key in common_keys:
-                if np.any(self.attributes[key] != other.attributes[key]):
+                if not iris.util._attribute_equal(
+                    self.attributes[key], other.attributes[key]
+                ):
                     compatible = False
                     break
 
@@ -838,9 +925,44 @@ class _DimensionalMetadata(CFVariableMixin, metaclass=ABCMeta):
             if self.coord_system:
                 element.appendChild(self.coord_system.xml_element(doc))
 
+        is_masked_array = np.ma.isMaskedArray(self._values)
+
         # Add the values
         element.setAttribute("value_type", str(self._value_type_name()))
         element.setAttribute("shape", str(self.shape))
+
+        # data checksum
+        if CML_SETTINGS.coord_checksum:
+            crc = iris.util.array_checksum(self._values)
+            element.setAttribute("checksum", crc)
+
+            if is_masked_array:
+                # Add the number of masked elements
+                if np.ma.is_masked(self._values):
+                    crc = iris.util.array_checksum(self._values.mask)
+                else:
+                    crc = "no-masked-elements"
+                element.setAttribute("mask_checksum", crc)
+
+        # array ordering:
+        def _order(array):
+            order = ""
+            if array.flags["C_CONTIGUOUS"]:
+                order = "C"
+            elif array.flags["F_CONTIGUOUS"]:
+                order = "F"
+            return order
+
+        if CML_SETTINGS.coord_order:
+            element.setAttribute("order", _order(self._values))
+            if is_masked_array:
+                element.setAttribute("mask_order", _order(self._values.mask))
+
+        # masked element count:
+        if CML_SETTINGS.masked_value_count and is_masked_array:
+            element.setAttribute(
+                "masked_count", str(np.count_nonzero(self._values.mask))
+            )
 
         # The values are referred to "points" of a coordinate and "data"
         # otherwise.
@@ -850,7 +972,31 @@ class _DimensionalMetadata(CFVariableMixin, metaclass=ABCMeta):
             values_term = "indices"
         else:
             values_term = "data"
-        element.setAttribute(values_term, self._xml_array_repr(self._values))
+        element.setAttribute(
+            values_term,
+            self._xml_array_repr(self._values),
+        )
+
+        if iris.util.CML_SETTINGS.coord_data_array_stats and len(self._values) > 1:
+            data = self._values
+
+            if np.issubdtype(data.dtype.type, np.number):
+                data_min = data.min()
+                data_max = data.max()
+                if data_min == data_max:
+                    # When data is constant, std() is too sensitive.
+                    data_std = 0
+                else:
+                    data_std = data.std()
+
+                stats_xml_element = doc.createElement("stats")
+                stats_xml_element.setAttribute("std", str(data_std))
+                stats_xml_element.setAttribute("min", str(data_min))
+                stats_xml_element.setAttribute("max", str(data_max))
+                stats_xml_element.setAttribute("masked", str(ma.is_masked(data)))
+                stats_xml_element.setAttribute("mean", str(data.mean()))
+
+                element.appendChild(stats_xml_element)
 
         return element
 
@@ -881,7 +1027,11 @@ class _DimensionalMetadata(CFVariableMixin, metaclass=ABCMeta):
         if hasattr(data, "to_xml_attr"):
             result = data._values.to_xml_attr()
         else:
-            result = iris.util.format_array(data)
+            edgeitems = CML_SETTINGS.array_edgeitems
+            if CML_SETTINGS.numpy_formatting:
+                result = iris.util.format_array(data, edgeitems=edgeitems)
+            else:
+                result = iris.util.array_summary(data, edgeitems=edgeitems)
         return result
 
     def _value_type_name(self):
@@ -1233,6 +1383,9 @@ class Cell(namedtuple("Cell", ["point", "bound"])):
     # Make this class's comparison operators override those of numpy
     __array_priority__ = 100
 
+    # pre-computed hash for un-hashable `np.ma.masked` value
+    _MASKED_VALUE_HASH = hash("<<##MASKED_VALUE##>>")
+
     def __new__(cls, point=None, bound=None):
         """Construct a Cell from point or point-and-bound information."""
         if point is None:
@@ -1273,13 +1426,17 @@ class Cell(namedtuple("Cell", ["point", "bound"])):
 
     def __hash__(self):
         # See __eq__ for the definition of when two cells are equal.
+        point = self.point
+        if np.ma.is_masked(point):
+            # `np.ma.masked` is unhashable
+            point = Cell._MASKED_VALUE_HASH
         if self.bound is None:
-            return hash(self.point)
+            return hash(point)
         bound = self.bound
         rbound = bound[::-1]
         if rbound < bound:
             bound = rbound
-        return hash((self.point, bound))
+        return hash((point, bound))
 
     def __eq__(self, other):
         """Compare Cell equality depending on the type of the object to be compared."""
@@ -1781,13 +1938,42 @@ class Coord(_DimensionalMetadata):
         """
         super().convert_units(unit=unit)
 
-    def cells(self):
-        """Return an iterable of Cell instances for this Coord.
+    def cells(self, /, *, pydate: bool | None = False) -> Iterator[Cell]:
+        """Generate a :class:`~iris.coords.Cell` for each coordinate index.
 
         For example::
 
-           for cell in self.cells():
+           for cell in coord.cells():
               ...
+
+        Parameters
+        ----------
+        pydate : bool, default=False,
+            Generate :class:`~datetime.datetime` compatible objects for a temporal
+            coordinate with either a ``standard``, ``gregorian`` or
+            ``proleptic_gregorian`` calendar. Defaults to creating :mod:`cftime`
+            objects for temporal coordinates.
+
+        Yields
+        ------
+        :class:`~iris.coord.Cell`
+            Contains a single coordinate ``point``, or ``point`` and ``bound``.
+
+        Raises
+        ------
+        :class:`~iris.exceptions.CoordinateMultiDimError`
+            Does not support multi-dimensional coordinates.
+        ValueError
+            Cannot create a :class:`~datetime.datetime` from an invalid
+            calendar for a temporal coordinate.
+
+        Notes
+        -----
+        .. warning::
+
+            For **temporal** coordinates the ``point`` and ``bound`` of the
+            :class:`~iris.coords.Cell` will be a :mod:`cftime` object rather
+            than a native Python :class:`~datetime.datetime` object.
 
         """
         if self.ndim != 1:
@@ -1795,10 +1981,19 @@ class Coord(_DimensionalMetadata):
 
         points = self.points
         bounds = self.bounds
+
         if self.units.is_time_reference():
-            points = self.units.num2date(points)
+            convert = self.units.num2pydate if pydate else self.units.num2date
+
+            try:
+                points = convert(points)
+            except ValueError as err:
+                emsg = err.args[0]
+                # clean limited traceback for user
+                raise ValueError(emsg.capitalize()) from None
+
             if self.has_bounds():
-                bounds = self.units.num2date(bounds)
+                bounds = convert(bounds)
 
         if self.has_bounds():
             for point, bound in zip(points, bounds):
@@ -1977,16 +2172,19 @@ class Coord(_DimensionalMetadata):
         if not self.has_bounds():
             if self.ndim == 1:
                 warnings.warn(
-                    "Coordinate {!r} is not bounded, guessing "
-                    "contiguous bounds.".format(self.name()),
+                    f"Coordinate {self.name()!r} is not bounded, "
+                    f"guessing contiguous bounds.",
                     category=iris.warnings.IrisGuessBoundsWarning,
                 )
                 bounds = self._guess_bounds()
             elif self.ndim == 2:
                 raise ValueError(
-                    "2D coordinate {!r} is not bounded. Guessing "
-                    "bounds of 2D coords is not currently "
-                    "supported.".format(self.name())
+                    f"2D coordinate {self.name()!r} is not bounded. "
+                    f"Guessing bounds of 2D coords is not supported "
+                    f"for individual coordinates. See "
+                    f"iris.analysis.cartography.guess_2D_bounds for "
+                    f"a function which guesses bounds for a pair of "
+                    f"coordinates."
                 )
         else:
             self._sanity_check_bounds()
@@ -2073,16 +2271,46 @@ class Coord(_DimensionalMetadata):
         """Return a boolean indicating whether the coord has a bounds array."""
         return self._bounds_dm is not None
 
-    def cell(self, index):
-        """Point/bound cell at the given coordinate index.
+    def cell(self, index: int, /, *, pydate: bool | None = False) -> Cell:
+        """Generate a :class:`~iris.coords.Cell` for the given coordinate `index`.
 
-        Return the single :class:`Cell` instance which results from slicing the
-        points/bounds with the given index.
+        Parameters
+        ----------
+        index : int
+            The `index` of the coordinate to generate a :class:`~iris.coords.Cell`.
+        pydate : bool, default=False
+            Generate :class:`~datetime.datetime` compatible objects for a temporal
+            coordinate with either a ``standard``, ``gregorian`` or
+            ``proleptic_gregorian`` calendar. Defaults to creating :mod:`cftime`
+            objects for temporal coordinates.
+
+        Returns
+        -------
+        :class:`~iris.coord.Cell`
+            Contains the ``point``, or ``point`` and ``bound`` located at the
+            given coordinate `index`.
+
+        Raises
+        ------
+        IndexError
+            Does not support multi-dimensional coordinates.
+        ValueError
+            Cannot create a :class:`~datetime.datetime` from an invalid
+            calendar for a temporal coordinate.
+
+        Notes
+        -----
+        .. warning::
+
+            For **temporal** coordinates the ``point`` and ``bound`` of the
+            :class:`~iris.coords.Cell` will be a :mod:`cftime` object rather
+            than a native Python :class:`~datetime.datetime` object.
 
         """
         index = iris.util._build_full_slice_given_keys(index, self.ndim)
 
-        point = tuple(np.array(self.core_points()[index], ndmin=1).flatten())
+        # Use `np.asanyaray` to preserve any masked values:
+        point = tuple(np.asanyarray(self.core_points()[index]).flatten())
         if len(point) != 1:
             raise IndexError(
                 "The index %s did not uniquely identify a single "
@@ -2091,12 +2319,23 @@ class Coord(_DimensionalMetadata):
 
         bound = None
         if self.has_bounds():
-            bound = tuple(np.array(self.core_bounds()[index], ndmin=1).flatten())
+            # Use `np.asanyarray` to preserve any masked values (see #5158):
+            bound = tuple(
+                np.atleast_1d(np.asanyarray(self.core_bounds()[index])).flatten()
+            )
 
         if self.units.is_time_reference():
-            point = self.units.num2date(point)
+            convert = self.units.num2pydate if pydate else self.units.num2date
+
+            try:
+                point = convert(point)
+            except ValueError as err:
+                emsg = err.args[0]
+                # clean limited traceback for user
+                raise ValueError(emsg.capitalize()) from None
+
             if bound is not None:
-                bound = self.units.num2date(bound)
+                bound = convert(bound)
 
         return Cell(point, bound)
 
@@ -2196,7 +2435,7 @@ class Coord(_DimensionalMetadata):
                 item = self.core_points()
 
             # Determine the array library for stacking
-            al = da if _lazy.is_lazy_data(item) else np
+            al = da if _lazy.is_lazy_data(item) else ma
 
             # Calculate the bounds and points along the right dims
             bounds = al.stack(
@@ -2207,6 +2446,12 @@ class Coord(_DimensionalMetadata):
                 axis=-1,
             )
             points = al.array(bounds.sum(axis=-1) * 0.5, dtype=self.dtype)
+
+            if ma.isMaskedArray(points) and not np.any(points.mask):
+                points = points.data
+
+            if ma.isMaskedArray(bounds) and not np.any(bounds.mask):
+                bounds = bounds.data
 
             # Create the new collapsed coordinate.
             coord = self.copy(points=points, bounds=bounds)
@@ -2241,7 +2486,7 @@ class Coord(_DimensionalMetadata):
         # XXX Consider moving into DimCoord
         # ensure we have monotonic points
         if not self.is_monotonic():
-            raise ValueError(
+            raise iris.exceptions.MonotonicityError(
                 "Need monotonic points to generate bounds for %s" % self.name()
             )
 
@@ -2253,8 +2498,7 @@ class Coord(_DimensionalMetadata):
 
         if self.has_bounds():
             raise ValueError(
-                "Coord already has bounds. Remove the bounds "
-                "before guessing new ones."
+                "Coord already has bounds. Remove the bounds before guessing new ones."
             )
 
         if monthly or yearly:
@@ -2310,8 +2554,12 @@ class Coord(_DimensionalMetadata):
                 points = np.empty(self.shape[0] + 2)
                 points[1:-1] = self.points
                 direction = 1 if self.points[-1] > self.points[0] else -1
-                points[0] = self.points[-1] - (self.units.modulus * direction)
-                points[-1] = self.points[0] + (self.units.modulus * direction)
+                modulus_type = np.promote_types(
+                    self.points.dtype, type(self.units.modulus)
+                )
+                (modulus,) = np.array([self.units.modulus], dtype=modulus_type)
+                points[0] = self.points[-1] - (modulus * direction)
+                points[-1] = self.points[0] + (modulus * direction)
                 diffs = np.diff(points)
             else:
                 diffs = np.diff(self.points)
@@ -2431,9 +2679,9 @@ class Coord(_DimensionalMetadata):
 
         >>> cube = iris.load_cube(iris.sample_data_path('ostia_monthly.nc'))
         >>> cube.coord('latitude').nearest_neighbour_index(0)
-        9
+        np.int64(9)
         >>> cube.coord('longitude').nearest_neighbour_index(10)
-        12
+        np.int64(12)
 
         .. note:: If the coordinate contains bounds, these will be used to
             determine the nearest neighbour instead of the point values.
@@ -2446,8 +2694,7 @@ class Coord(_DimensionalMetadata):
         bounds = self.bounds if self.has_bounds() else np.array([])
         if self.ndim != 1:
             raise ValueError(
-                "Nearest-neighbour is currently limited"
-                " to one-dimensional coordinates."
+                "Nearest-neighbour is currently limited to one-dimensional coordinates."
             )
         do_circular = getattr(self, "circular", False)
         if do_circular:
@@ -2538,7 +2785,10 @@ class Coord(_DimensionalMetadata):
 
         # Add bounds, points are handled by the parent class.
         if self.has_bounds():
-            element.setAttribute("bounds", self._xml_array_repr(self.bounds))
+            element.setAttribute(
+                "bounds",
+                self._xml_array_repr(self.bounds),
+            )
 
         return element
 
@@ -2546,6 +2796,26 @@ class Coord(_DimensionalMetadata):
         """Coord specific stuff for the xml id."""
         unique_value += str(self.coord_system).encode("utf-8") + b"\0"
         return unique_value
+
+    def as_string_arrays(self, fmt=None):
+        """Access a formatted array of strings from the points and bounds.
+
+        Will return a :class:`~iris.coords.PointBoundString`. This can either be
+        converted directly to a string, or numpy string arrays for the points and
+        bounds can be accessed via the `points` and `bounds` properties. These
+        properties are designed to be only calculated when they are called and any
+        lazy points and bounds on the coordinate will remain lazy.
+
+        Parameters
+        ----------
+        fmt : str, optional
+            The format string to be applied when converting to a string. If the
+            coordinate contains datetime information, the points and bounds will
+            be converted to datetimes before being formatted to strings.
+        """
+        return PointBoundStrings(
+            self.core_points(), self.core_bounds(), self.units, fmt=fmt
+        )
 
 
 _regular_points = lru_cache(iris.util.regular_points)
@@ -2700,13 +2970,15 @@ class DimCoord(Coord):
         #: Whether the coordinate wraps by ``coord.units.modulus``.
         self.circular = circular
 
-    def __deepcopy__(self, memo):  # numpydoc ignore=SS02
-        """coord.__deepcopy__() -> Deep copy of coordinate.
+    def __deepcopy__(self, memo):
+        """Return a deep copy of the DimCoord, with read-only points and bounds."""
+        # Inspired by matplotlib#30198.
+        # Replicates the default copy behaviour, which can then be modified below.
+        cls = self.__class__
+        memo[id(self)] = new_coord = cls.__new__(cls)
+        for key, val in self.__dict__.items():
+            setattr(new_coord, key, copy.deepcopy(val, memo))
 
-        Used if copy.deepcopy is called on a coordinate.
-
-        """
-        new_coord = copy.deepcopy(super(), memo)
         # Ensure points and bounds arrays are read-only.
         new_coord._values_dm.data.flags.writeable = False
         if new_coord._bounds_dm is not None:
@@ -2788,7 +3060,9 @@ class DimCoord(Coord):
             raise TypeError(emsg.format(self.name(), self.__class__.__name__))
         if points.size > 1 and not iris.util.monotonic(points, strict=True):
             emsg = "The {!r} {} points array must be strictly monotonic."
-            raise ValueError(emsg.format(self.name(), self.__class__.__name__))
+            raise iris.exceptions.MonotonicityError(
+                emsg.format(self.name(), self.__class__.__name__)
+            )
 
     @property
     def _values(self):
@@ -2807,6 +3081,9 @@ class DimCoord(Coord):
         # Check validity requirements for dimension-coordinate points.
         self._new_points_requirements(points)
         # Cast to a numpy array for masked arrays with no mask.
+
+        # NOTE: This is the point where any mask is lost on a coordinate if none of the
+        # values are actually masked. What if we wanted this to be an AuxCoord with a mask?
         points = np.array(points)
 
         super(DimCoord, self.__class__)._values.fset(self, points)
@@ -2865,7 +3142,7 @@ class DimCoord(Coord):
                     )
                     if not monotonic:
                         emsg = "The {!r} {} bounds array must be strictly monotonic."
-                        raise ValueError(
+                        raise iris.exceptions.MonotonicityError(
                             emsg.format(self.name(), self.__class__.__name__)
                         )
                     directions.add(direction)
@@ -2875,7 +3152,9 @@ class DimCoord(Coord):
                         "The direction of monotonicity for {!r} {} must "
                         "be consistent across all bounds."
                     )
-                    raise ValueError(emsg.format(self.name(), self.__class__.__name__))
+                    raise iris.exceptions.MonotonicityError(
+                        emsg.format(self.name(), self.__class__.__name__)
+                    )
 
                 if n_bounds == 2:
                     # Make ordering of bounds consistent with coord's direction
@@ -2958,7 +3237,7 @@ class AuxCoord(Coord):
             Descriptive name of the coordinate.
         var_name : optional
             The netCDF variable name for the coordinate.
-        unit : :class:`~cf_units.Unit`, optional
+        units : :class:`~cf_units.Unit`, optional
             The :class:`~cf_units.Unit` of the coordinate's values.
             Can be a string, which will be converted to a Unit object.
         bounds : optional
@@ -3046,8 +3325,8 @@ class CellMethod(iris.util._OrderedHashable):
         elif isinstance(coords, str):
             _coords.append(BaseMetadata.token(coords) or default_name)
         else:
-            normalise = (
-                lambda coord: coord.name(token=True)
+            normalise = lambda coord: (
+                coord.name(token=True)
                 if isinstance(coord, Coord)
                 else BaseMetadata.token(coord) or default_name
             )

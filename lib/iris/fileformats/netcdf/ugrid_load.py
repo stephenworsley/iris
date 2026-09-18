@@ -5,6 +5,11 @@
 
 r"""Allow the construction of :class:`~iris.mesh.MeshXY`.
 
+.. z_reference:: iris.fileformats.netcdf.ugrid_load
+   :tags: topic_load_save;topic_mesh
+
+   API reference
+
 Extension functions for Iris NetCDF loading, to construct
 :class:`~iris.mesh.MeshXY` from UGRID data in files.
 
@@ -15,13 +20,17 @@ Extension functions for Iris NetCDF loading, to construct
 
 """
 
+from functools import partial
 from itertools import groupby
 from pathlib import Path
+from typing import Iterable
 import warnings
 
+from iris.common.mixin import CFVariableMixin
 from iris.config import get_logger
 from iris.coords import AuxCoord
-from iris.io import decode_uri, expand_filespecs
+from iris.io import _is_nczarr_fragment, decode_uri, expand_filespecs
+from iris.loading import LoadProblems
 from iris.mesh.components import Connectivity, MeshXY
 from iris.util import guess_coord_axis
 from iris.warnings import IrisCfWarning, IrisDefaultingWarning, IrisIgnoringWarning
@@ -56,13 +65,25 @@ def _meshes_from_cf(cf_reader):
     # Mesh instances are shared between file phenomena.
     # TODO: more sophisticated Mesh sharing between files.
     # TODO: access external Mesh cache?
+    from iris.fileformats._nc_load_rules.helpers import _add_or_capture
+
     meshes = {}
+
     if cf_reader._with_ugrid:
         mesh_vars = cf_reader.cf_group.meshes
-        meshes = {
-            name: _build_mesh(cf_reader, var, cf_reader.filename)
-            for name, var in mesh_vars.items()
-        }
+        for name, var in mesh_vars.items():
+            _ = _add_or_capture(
+                build_func=partial(_build_mesh, cf_reader, var),
+                add_method=partial(meshes.__setitem__, name),
+                cf_var=var,
+                # Meshes are 'linked' to zero or more Cubes; they do not have
+                #  a destination in the same way as other Cube components.
+                destination=LoadProblems.Problem.Destination(
+                    iris_class=CFVariableMixin,
+                    identifier="NOT_APPLICABLE",
+                ),
+            )
+
     return meshes
 
 
@@ -76,7 +97,7 @@ def load_mesh(uris, var_name=None):
     ----------
     uris : str or iterable of str
         One or more filenames/URI's. Filenames can include wildcards. Any URI's
-        must support OpenDAP.
+        must support OpenDAP or NcZarr.
     var_name : str, optional
         Only return a :class:`~iris.mesh.MeshXY` if its
         var_name matches this value.
@@ -102,7 +123,7 @@ def load_meshes(uris, var_name=None):
     ----------
     uris : str or iterable of str
         One or more filenames/URI's. Filenames can include wildcards. Any URI's
-        must support OpenDAP.
+        must support OpenDAP nor NcZarr.
     var_name : str, optional
         Only return :class:`~iris.mesh.MeshXY` that have
         var_names matching this value.
@@ -122,27 +143,38 @@ def load_meshes(uris, var_name=None):
     from iris.fileformats.cf import CFReader
     import iris.fileformats.netcdf.loader as nc_loader
 
-    if isinstance(uris, str):
+    if (
+        isinstance(uris, str)
+        or hasattr(uris, "fromcdl")
+        or not isinstance(uris, Iterable)
+    ):
+        # Make a string, Dataset, or other single item, into an iterable.
         uris = [uris]
+
+    def _categorise(decoded: tuple[str, str, str | None]) -> tuple[str, str, str]:
+        scheme, part, fragment = decoded
+        category = "nczarr" if _is_nczarr_fragment(fragment) else scheme
+        if fragment:
+            part = f"{part}#{fragment}"
+        return category, scheme, part
 
     # Group collections of uris by their iris handler
     # Create list of tuples relating schemes to part names.
-    uri_tuples = sorted(decode_uri(uri) for uri in uris)
-
+    uri_tuples = sorted(_categorise(decode_uri(uri)) for uri in uris)
     valid_sources = []
-    for scheme, groups in groupby(uri_tuples, key=lambda x: x[0]):
+    for category, groups in groupby(uri_tuples, key=lambda x: x[0]):
         # Call each scheme handler with the appropriate URIs
-        if scheme == "file":
-            filenames = [x[1] for x in groups]
+        if category == "file":
+            filenames = [part for _cat, _scheme, part in groups]
             sources = expand_filespecs(filenames)
-        elif scheme in ["http", "https"]:
-            sources = [":".join(x) for x in groups]
+        elif category in ["http", "https", "nczarr"]:
+            sources = [f"{scheme}:{part}" for _cat, scheme, part in groups]
         else:
-            message = f"Iris cannot handle the URI scheme: {scheme}"
+            message = f"Iris cannot handle the URI scheme: {category}"
             raise ValueError(message)
 
         for source in sources:
-            if scheme == "file":
+            if category == "file":
                 with open(source, "rb") as fh:
                     handling_format_spec = FORMAT_AGENT.get_spec(Path(source).name, fh)
             else:
@@ -167,7 +199,7 @@ def load_meshes(uris, var_name=None):
     return result
 
 
-def _build_aux_coord(coord_var, file_path):
+def _build_aux_coord(coord_var):
     """Construct a :class:`~iris.coords.AuxCoord`.
 
     Construct a :class:`~iris.coords.AuxCoord` from a given
@@ -183,7 +215,7 @@ def _build_aux_coord(coord_var, file_path):
     assert isinstance(coord_var, CFUGridAuxiliaryCoordinateVariable)
     attributes = {}
     attr_units = get_attr_units(coord_var, attributes)
-    points_data = nc_loader._get_cf_var_data(coord_var, file_path)
+    points_data = nc_loader._get_cf_var_data(coord_var)
 
     # Bounds will not be loaded:
     # Bounds may be present, but the UGRID conventions state this would
@@ -224,7 +256,7 @@ def _build_aux_coord(coord_var, file_path):
     return coord, axis
 
 
-def _build_connectivity(connectivity_var, file_path, element_dims):
+def _build_connectivity(connectivity_var, element_dims):
     """Construct a :class:`~iris.mesh.Connectivity`.
 
     Construct a :class:`~iris.mesh.Connectivity` from a
@@ -240,7 +272,7 @@ def _build_connectivity(connectivity_var, file_path, element_dims):
     assert isinstance(connectivity_var, CFUGridConnectivityVariable)
     attributes = {}
     attr_units = get_attr_units(connectivity_var, attributes)
-    indices_data = nc_loader._get_cf_var_data(connectivity_var, file_path)
+    indices_data = nc_loader._get_cf_var_data(connectivity_var)
 
     cf_role = connectivity_var.cf_role
     start_index = connectivity_var.start_index
@@ -270,7 +302,7 @@ def _build_connectivity(connectivity_var, file_path, element_dims):
     return connectivity, dim_names[0]
 
 
-def _build_mesh(cf, mesh_var, file_path):
+def _build_mesh(cf, mesh_var):
     """Construct a :class:`~iris.mesh.MeshXY`.
 
     Construct a :class:`~iris.mesh.MeshXY` from a given
@@ -342,7 +374,7 @@ def _build_mesh(cf, mesh_var, file_path):
     edge_coord_args = []
     face_coord_args = []
     for coord_var in mesh_var.cf_group.ugrid_coords.values():
-        coord_and_axis = _build_aux_coord(coord_var, file_path)
+        coord_and_axis = _build_aux_coord(coord_var)
         coord = coord_and_axis[0]
 
         if coord.var_name in mesh_var.node_coordinates.split():
@@ -369,7 +401,7 @@ def _build_mesh(cf, mesh_var, file_path):
     connectivity_args = []
     for connectivity_var in mesh_var.cf_group.connectivities.values():
         connectivity, first_dim_name = _build_connectivity(
-            connectivity_var, file_path, element_dims
+            connectivity_var, element_dims
         )
         assert connectivity.var_name == getattr(mesh_var, connectivity.cf_role)
         connectivity_args.append(connectivity)
@@ -426,8 +458,7 @@ def _build_mesh_coords(mesh, cf_var):
         # We should probably issue warnings and recover, but that is too much
         # work.  Raising a more intelligible error is easy to do though.
         msg = (
-            f"mesh data variable {cf_var.name!r} has an invalid "
-            f"location={location!r}."
+            f"mesh data variable {cf_var.name!r} has an invalid location={location!r}."
         )
         raise ValueError(msg)
     mesh_dim_name = element_dimensions.get(location)

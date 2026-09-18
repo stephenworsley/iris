@@ -4,6 +4,11 @@
 # See LICENSE in the root of the repository for full licensing details.
 """Experimental module for importing/exporting raster data from Iris cubes using the GDAL library.
 
+.. z_reference:: iris.experimental.raster
+   :tags: topic_experimental;topic_load_save
+
+   API reference
+
 See also: `GDAL - Geospatial Data Abstraction Library <https://www.gdal.org>`_.
 
 TODO: If this module graduates from experimental the (optional) GDAL
@@ -19,6 +24,7 @@ from osgeo import gdal, osr
 import iris
 from iris._deprecation import warn_deprecated
 import iris.coord_systems
+from iris.exceptions import MonotonicityError
 
 wmsg = (
     "iris.experimental.raster is deprecated since version 3.2, and will be "
@@ -118,7 +124,7 @@ def export_geotiff(cube, fname):
     Notes
     -----
     For more details on GeoTiff specification and PixelIsArea, see:
-    https://www.remotesensing.org/geotiff/spec/geotiff2.5.html#2.5.2.2
+    https://docs.ogc.org/is/19-008r4/19-008r4.html#_pixelisarea_raster_space
 
     .. deprecated:: 3.2.0
 
@@ -174,7 +180,7 @@ def export_geotiff(cube, fname):
             raise ValueError(msg)
 
     if coord_x.points[0] > coord_x.points[-1]:
-        raise ValueError(
+        raise MonotonicityError(
             "Coordinate {!r} x-points must be monotonically increasing.".format(name)
         )
 

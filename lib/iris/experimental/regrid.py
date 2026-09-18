@@ -4,6 +4,11 @@
 # See LICENSE in the root of the repository for full licensing details.
 """Regridding functions.
 
+.. z_reference:: iris.experimental.regrid
+   :tags: topic_experimental;topic_regrid
+
+   API reference
+
 Notes
 -----
 .. deprecated:: 3.2.0
@@ -149,11 +154,6 @@ def regrid_weighted_curvilinear_to_rectilinear(src_cube, weights, grid_cube):
     :math:`\sum (src\_cube.data_{ij} * weights_{ij}) / \sum weights_{ij}`, for
     all :math:`ij` :data:`src_cube` points that are bound by that cell.
 
-    Warnings
-    --------
-    All coordinates that span the :data:`src_cube` that don't define
-    the horizontal curvilinear grid will be ignored.
-
     Parameters
     ----------
     src_cube : :class:`iris.cube.Cube`
@@ -170,6 +170,11 @@ def regrid_weighted_curvilinear_to_rectilinear(src_cube, weights, grid_cube):
     Returns
     -------
     A :class:`iris.cube.Cube` instance.
+
+    Warnings
+    --------
+    All coordinates that span the :data:`src_cube` that don't define
+    the horizontal curvilinear grid will be ignored.
 
     Notes
     -----
@@ -284,8 +289,7 @@ class _ProjectedUnstructuredRegridder:
             )
         if src_x_coord.coord_system is None:
             raise ValueError(
-                "'src_cube' lateral geographic coordinates have "
-                "no coordinate system."
+                "'src_cube' lateral geographic coordinates have no coordinate system."
             )
         tgt_x_coord, tgt_y_coord = get_xy_dim_coords(tgt_grid_cube)
         if tgt_x_coord.coord_system != tgt_y_coord.coord_system:

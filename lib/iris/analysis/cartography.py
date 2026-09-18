@@ -2,7 +2,13 @@
 #
 # This file is part of Iris and is released under the BSD license.
 # See LICENSE in the root of the repository for full licensing details.
-"""Various utilities and numeric transformations relevant to cartography."""
+"""Various utilities and numeric transformations relevant to cartography.
+
+.. z_reference:: iris.analysis.cartography
+   :tags: topic_maths_stats
+
+   API reference
+"""
 
 from collections import namedtuple
 import copy
@@ -21,7 +27,7 @@ import iris.exceptions
 from iris.util import _meshgrid
 import iris.warnings
 
-from ._grid_angles import gridcell_angles, rotate_grid_vectors
+from ._grid_angles import gridcell_angles, guess_2D_bounds, rotate_grid_vectors
 
 # List of contents to control Sphinx autodocs.
 # Unfortunately essential to get docs for the grid_angles functions.
@@ -33,6 +39,7 @@ __all__ = [
     "get_xy_contiguous_bounded_grids",
     "get_xy_grids",
     "gridcell_angles",
+    "guess_2D_bounds",
     "project",
     "rotate_grid_vectors",
     "rotate_pole",
@@ -60,6 +67,11 @@ def wrap_lons(lons, base, period):
     base :
     period :
 
+    Notes
+    -----
+    This function maintains laziness when called; it does not realise data.
+    See more at :doc:`/user_manual/explanation/real_and_lazy_data`.
+
     Examples
     --------
     .. testsetup::
@@ -72,15 +84,17 @@ def wrap_lons(lons, base, period):
         >>> print(wrap_lons(np.array([185, 30, -200, 75]), -180, 360))
         [-175.   30.  160.   75.]
 
-    Notes
-    -----
-    This function maintains laziness when called; it does not realise data.
-    See more at :doc:`/userguide/real_and_lazy_data`.
     """
     # It is important to use 64bit floating precision when changing a floats
-    # numbers range.
+    # numbers range, but the original floating-point dtype is preserved so that
+    # e.g. float32 longitudes are not promoted to float64 (see #4119). Integer
+    # (and other non-floating) inputs still return float64.
+    orig_dtype = lons.dtype
     lons = lons.astype(np.float64)
-    return ((lons - base) % period) + base
+    result = ((lons - base) % period) + base
+    if orig_dtype.kind == "f":
+        result = result.astype(orig_dtype)
+    return result
 
 
 def unrotate_pole(rotated_lons, rotated_lats, pole_lon, pole_lat):
@@ -270,16 +284,16 @@ def get_xy_grids(cube):
     cube :
         The cube for which to generate 2D X and Y points.
 
+    Notes
+    -----
+    This function maintains laziness when called; it does not realise data.
+    See more at :doc:`/user_manual/explanation/real_and_lazy_data`.
+
     Examples
     --------
     ::
 
         x, y = get_xy_grids(cube)
-
-    Notes
-    -----
-    This function maintains laziness when called; it does not realise data.
-    See more at :doc:`/userguide/real_and_lazy_data`.
 
     """
     x_coord, y_coord = cube.coord(axis="X"), cube.coord(axis="Y")
@@ -308,16 +322,16 @@ def get_xy_contiguous_bounded_grids(cube):
     ----------
     cube : :class:`iris.cube.Cube`
 
+    Notes
+    -----
+    This function maintains laziness when called; it does not realise data.
+    See more at :doc:`/user_manual/explanation/real_and_lazy_data`.
+
     Examples
     --------
     ::
 
         xs, ys = get_xy_contiguous_bounded_grids(cube)
-
-    Notes
-    -----
-    This function maintains laziness when called; it does not realise data.
-    See more at :doc:`/userguide/real_and_lazy_data`.
 
     """
     x_coord, y_coord = cube.coord(axis="X"), cube.coord(axis="Y")
@@ -382,7 +396,10 @@ def area_weights(cube, normalize=False, compute=True, chunks=None):
     This is a 2D lat/lon area weights array, repeated over the non lat/lon
     dimensions.
 
-    The cube must have coordinates 'latitude' and 'longitude' with bounds.
+    The cube must include a 1-dimensional coordinate with 'latitude' in its
+    :meth:`~iris.coords.Coord.name`, and another 1-dimensional coordinate with
+    'longitude' in its :meth:`~iris.coords.Coord.name`. Both of these coordinates must
+    have bounds.
 
     Area weights are calculated for each lat/lon cell as:
 
@@ -405,9 +422,8 @@ def area_weights(cube, normalize=False, compute=True, chunks=None):
         If False, return a lazy dask array. If True, return a numpy array.
     chunks : tuple, optional
         If compute is False and a value is provided, then the result will use
-        these chunks instead of the same chunks as the cube data. The values
-        provided here will only be used along dimensions that are not latitude
-        or longitude.
+        these chunks. The values provided here will only be used along
+        dimensions that are not latitude or longitude.
 
     Returns
     -------
@@ -534,6 +550,11 @@ def cosine_latitude_weights(cube):
     ----------
     cube : :class:`iris.cube.Cube`
 
+    Notes
+    -----
+    This function maintains laziness when called; it does not realise data.
+    See more at :doc:`/user_manual/explanation/real_and_lazy_data`.
+
     Examples
     --------
     Compute weights suitable for averaging type operations::
@@ -550,10 +571,6 @@ def cosine_latitude_weights(cube):
         cube = iris.load_cube(iris.sample_data_path('air_temp.pp'))
         weights = np.sqrt(cosine_latitude_weights(cube))
 
-    Notes
-    -----
-    This function maintains laziness when called; it does not realise data.
-    See more at :doc:`/userguide/real_and_lazy_data`.
     """
     # Find all latitude coordinates, we want one and only one.
     lat_coords = [coord for coord in cube.coords() if "latitude" in coord.name()]
@@ -657,7 +674,7 @@ def project(cube, target_proj, nx=None, ny=None):
     .. note::
 
         This function does not maintain laziness when called; it realises data.
-        See more at :doc:`/userguide/real_and_lazy_data`.
+        See more at :doc:`/user_manual/explanation/real_and_lazy_data`.
 
     .. warning::
 
@@ -1078,8 +1095,9 @@ def _transform_distance_vectors_tolerance_mask(src_crs, x, y, tgt_crs, ds, dx2, 
     """
     if x.shape != y.shape:
         raise ValueError(
-            "Arrays do not have matching shapes. "
-            "x.shape is {}, y.shape is {}.".format(x.shape, y.shape)
+            "Arrays do not have matching shapes. x.shape is {}, y.shape is {}.".format(
+                x.shape, y.shape
+            )
         )
     ones = np.ones(x.shape)
     zeros = np.zeros(x.shape)
@@ -1149,7 +1167,7 @@ def rotate_winds(u_cube, v_cube, target_cs):
     .. note::
 
             This function does not maintain laziness when called; it realises data.
-            See more at :doc:`/userguide/real_and_lazy_data`.
+            See more at :doc:`/user_manual/explanation/real_and_lazy_data`.
 
     .. warning::
 

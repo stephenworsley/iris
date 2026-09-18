@@ -2,7 +2,13 @@
 #
 # This file is part of Iris and is released under the BSD license.
 # See LICENSE in the root of the repository for full licensing details.
-"""Definitions of coordinate systems."""
+"""Definitions of coordinate systems.
+
+.. z_reference:: iris.coord_systems
+   :tags: topic_data_model
+
+   API reference
+"""
 
 from abc import ABCMeta, abstractmethod
 from functools import cached_property
@@ -331,8 +337,8 @@ class GeogCS(CoordSystem):
     def _globe(self):
         """A representation of this CRS as a Cartopy Globe.
 
-        Note
-        ----
+        Notes
+        -----
         This property is created when required and then cached for speed. That
         cached value is cleared when an assignment is made to a property of the
         class that invalidates the cache.
@@ -353,8 +359,8 @@ class GeogCS(CoordSystem):
     def _crs(self):
         """A representation of this CRS as a Cartopy CRS.
 
-        Note
-        ----
+        Notes
+        -----
         This property is created when required and then cached for speed. That
         cached value is cleared when an assignment is made to a property of the
         class that invalidates the cache.
@@ -769,8 +775,7 @@ class Orthographic(CoordSystem):
         globe = self._ellipsoid_to_globe(self.ellipsoid, ccrs.Globe())
 
         warnings.warn(
-            "Discarding false_easting and false_northing that are "
-            "not used by Cartopy.",
+            "Discarding false_easting and false_northing that are not used by Cartopy.",
             category=iris.warnings.IrisDefaultingWarning,
         )
 

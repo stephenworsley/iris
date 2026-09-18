@@ -4,6 +4,11 @@
 # See LICENSE in the root of the repository for full licensing details.
 """Module to support the saving of Iris cubes to a NetCDF file.
 
+.. z_reference:: iris.fileformats.netcdf.saver
+   :tags: topic_load_save
+
+   API reference
+
 Module to support the saving of Iris cubes to a NetCDF file, also using the CF
 conventions for metadata interpretation.
 
@@ -14,13 +19,16 @@ Also : `CF Conventions <https://cfconventions.org/>`_.
 
 """
 
+import codecs
 import collections
 from itertools import repeat, zip_longest
 import os
-import os.path
+from pathlib import Path
 import re
 import string
 import typing
+from typing import TYPE_CHECKING
+from urllib.parse import urlsplit
 import warnings
 
 import cf_units
@@ -29,6 +37,7 @@ import dask.array as da
 from dask.delayed import Delayed
 import numpy as np
 
+from iris import FUTURE
 from iris._deprecation import warn_deprecated
 from iris._lazy_data import _co_realise_lazy_arrays, is_lazy_data
 from iris.aux_factory import (
@@ -44,14 +53,30 @@ from iris.aux_factory import (
 import iris.config
 import iris.coord_systems
 import iris.coords
-from iris.coords import AncillaryVariable, AuxCoord, CellMeasure, DimCoord
+from iris.coords import (
+    AncillaryVariable,
+    AuxCoord,
+    CellMeasure,
+    DimCoord,
+    _DimensionalMetadata,
+)
 import iris.exceptions
 import iris.fileformats.cf
-from iris.fileformats.netcdf import _dask_locks, _thread_safe_nc
-import iris.io
+from iris.fileformats.netcdf import _bytecoding_datasets as bytecoding_datasets
+from iris.fileformats.netcdf import _dask_locks
+from iris.fileformats.netcdf import _thread_safe_nc as threadsafe_nc
+from iris.fileformats.netcdf._attribute_handlers import ATTRIBUTE_HANDLERS
 import iris.util
 import iris.warnings
 
+if TYPE_CHECKING:
+    from iris.cube import Cube
+    from iris.mesh.components import (
+        MeshEdgeCoords,
+        MeshFaceCoords,
+        MeshNodeCoords,
+        MeshXY,
+    )
 # Get the logger : shared logger for all in 'iris.fileformats.netcdf'.
 from . import logger
 
@@ -103,7 +128,12 @@ _CF_DATA_ATTRS = [
 _CF_GLOBAL_ATTRS = ["conventions", "featureType", "history", "title"]
 
 # UKMO specific attributes that should not be global.
-_UKMO_DATA_ATTRS = ["STASH", "um_stash_source", "ukmo__process_flags"]
+_UKMO_DATA_ATTRS = [
+    "STASH",
+    "um_stash_source",
+    "ukmo__process_flags",
+    "iris_extended_grid_mapping",
+]
 
 # TODO: whenever we advance to CF-1.11 we should then discuss a completion date
 #  for the deprecation of Rotated Mercator in coord_systems.py and
@@ -293,19 +323,25 @@ class VariableEmulator(typing.Protocol):
     shape: tuple[int, ...]
 
 
-CFVariable = typing.Union[_thread_safe_nc.VariableWrapper, VariableEmulator]
+CFVariable = typing.Union[bytecoding_datasets.VariableWrapper, VariableEmulator]
 
 
 class Saver:
-    """A manager for saving netcdf files."""
+    """A manager for saving NetCDF/NcZarr files."""
 
     def __init__(self, filename, netcdf_format, compute=True):
         """Manage saving netcdf files.
 
+        Also supports Zarr files in the NcZarr URL format, e.g.
+        ``file:///path/to/file#mode=nczarr,file``. Note that NcZarr is limited to
+        Zarr Storage Specification version 2. See the
+        `NcZarr docs <https://docs.unidata.ucar.edu/nug/current/nczarr_head.html>`
+        for more.
+
         Parameters
         ----------
         filename : str or netCDF4.Dataset
-            Name of the netCDF file to save the cube.
+            Name of the NetCDF file, or an NcZarr URL, to save the cube.
             OR a writeable object supporting the :class:`netCF4.Dataset` api.
         netcdf_format : str
             Underlying netCDF file format, one of 'NETCDF4', 'NETCDF4_CLASSIC',
@@ -332,8 +368,8 @@ class Saver:
         -------
         None
 
-        Example
-        -------
+        Examples
+        --------
         >>> import iris
         >>> from iris.fileformats.netcdf.saver import Saver
         >>> cubes = iris.load(iris.sample_data_path('atlantic_profiles.nc'))
@@ -376,9 +412,15 @@ class Saver:
             None  # this line just for the API page -- value is set later
         )
 
+        #: Whether the save target is an NCZarr URL.
+        self._is_nczarr = False
         # A list of delayed writes for lazy saving
         # a list of couples (source, target).
         self._delayed_writes = []
+        # A list of pre-close writes for NCZarr lazy saving.
+        # NCZarr cannot be reopened for deferred writes, so lazy data is
+        # written before __exit__ closes the file.
+        self._nczarr_writes = []
 
         # Detect if we were passed a pre-opened dataset (or something like one)
         self._to_open_dataset = hasattr(filename, "createVariable")
@@ -396,7 +438,7 @@ class Saver:
             # Put it inside a _thread_safe_nc wrapper to ensure thread-safety.
             # Except if it already is one, since they forbid "re-wrapping".
             if not hasattr(self._dataset, "THREAD_SAFE_FLAG"):
-                self._dataset = _thread_safe_nc.DatasetWrapper.from_existing(
+                self._dataset = bytecoding_datasets.EncodedDataset.from_existing(
                     self._dataset
                 )
 
@@ -406,13 +448,27 @@ class Saver:
         else:
             # Given a filepath string/path : create a dataset from that
             try:
-                self.filepath = os.path.abspath(filename)
-                self._dataset = _thread_safe_nc.DatasetWrapper(
+                # Lazy import to avoid circular import overhead at module import-time.
+                from iris.io import _is_nczarr_fragment
+
+                self._is_nczarr = _is_nczarr_fragment(
+                    urlsplit(str(filename)).fragment or None
+                )
+                if self._is_nczarr:
+                    # NCZarr URLs contain a #mode= fragment; Path() strips it.
+                    # Keep as a plain string and pass directly to DatasetWrapper.
+                    self.filepath = str(filename)
+                else:
+                    filepath = Path(filename)
+                    self.filepath = filepath.absolute()
+                self._dataset = bytecoding_datasets.EncodedDataset(
                     self.filepath, mode="w", format=netcdf_format
                 )
             except RuntimeError:
-                dir_name = os.path.dirname(self.filepath)
-                if not os.path.isdir(dir_name):
+                if self._is_nczarr:
+                    raise
+                dir_name = Path(self.filepath).parent
+                if not dir_name.is_dir():
                     msg = "No such file or directory: {}".format(dir_name)
                     raise IOError(msg)
                 if not os.access(dir_name, os.R_OK | os.W_OK):
@@ -427,7 +483,12 @@ class Saver:
         return self
 
     def __exit__(self, type, value, traceback):
-        """Flush any buffered data to the CF-netCDF file before closing."""
+        """Flush any buffered data to the CF-NetCDF/NcZarr file before closing."""
+        if self._nczarr_writes:
+            # NCZarr lazy writes must be computed while the file is still open;
+            # the deferred reopen-write pattern used for netCDF is not supported.
+            sources, targets = zip(*self._nczarr_writes)
+            da.store(list(sources), list(targets))
         self._dataset.sync()
         if not self._to_open_dataset:
             # Only close if the Saver created it.
@@ -454,10 +515,16 @@ class Saver:
     ):
         """Wrap for saving cubes to a NetCDF file.
 
+        Also supports Zarr files in the NcZarr URL format, e.g.
+        ``file:///path/to/file#mode=nczarr,file``. Note that NcZarr is limited to
+        Zarr Storage Specification version 2. See the
+        `NcZarr docs <https://docs.unidata.ucar.edu/nug/current/nczarr_head.html>`
+        for more.
+
         Parameters
         ----------
         cube : :class:`iris.cube.Cube`
-            A :class:`iris.cube.Cube` to be saved to a netCDF file.
+            A :class:`iris.cube.Cube` to be saved to a NetCDF/NcZarr file.
         local_keys : iterable of str, optional
             An iterable of cube attribute keys. Any cube attributes with
             matching keys will become attributes on the data variable rather
@@ -493,7 +560,7 @@ class Saver:
             Used to manually specify the HDF5 chunksizes for each dimension of
             the variable. A detailed discussion of HDF chunking and I/O
             performance is available
-            `here <https://www.unidata.ucar.edu/software/netcdf/documentation/NUG/netcdf_perf_chunking.html>`__.
+            `here <https://docs.unidata.ucar.edu/nug/current/netcdf_perf_chunking.html>`__.
             Basically, you want the chunk size for each dimension to match
             as closely as possible the size of the data block that users will
             read from the file. `chunksizes` cannot be set if `contiguous=True`.
@@ -512,8 +579,8 @@ class Saver:
             example, if `least_significant_digit=1`, data will be quantized
             using `numpy.around(scale*data)/scale`, where `scale = 2**bits`,
             and `bits` is determined so that a precision of 0.1 is retained (in
-            this case `bits=4`). From
-            `here <https://www.esrl.noaa.gov/psd/data/gridded/conventions/cdc_netcdf_standard.shtml>`__:
+            this case `bits=4`). From the
+            `metadata conventions <https://docs.unidata.ucar.edu/nug/current/attribute_conventions.html>`__:
             "least_significant_digit -- power of ten of the smallest decimal
             place in unpacked data that is a reliable value". Default is
             `None`, or no quantization, or 'lossless' compression.
@@ -522,7 +589,7 @@ class Saver:
             describes a numpy integer dtype(i.e. 'i2', 'short', 'u4') or a
             dict of packing parameters as described below. This provides
             support for netCDF data packing as described
-            `here <https://www.unidata.ucar.edu/software/netcdf/documentation/NUG/best_practices.html#bp_Packed-Data-Values>`__.
+            `here <https://docs.unidata.ucar.edu/nug/current/best_practices.html#bp_Best_Practices>`__.
             If this argument is a type (or type string), appropriate values of
             scale_factor and add_offset will be automatically calculated based
             on `cube.data` and possible masking. For more control, pass a dict
@@ -580,26 +647,33 @@ class Saver:
         all_dimensions = mesh_dimensions + nonmesh_dimensions
         self._create_cf_dimensions(cube, all_dimensions, unlimited_dimensions)
 
+        # Group the generic compression keyword arguments together for
+        # convenience, as they will be applied to other cube metadata
+        # as well as the cube data payload.
+        compression_kwargs = {
+            "complevel": complevel,
+            "fletcher32": fletcher32,
+            "shuffle": shuffle,
+            "zlib": zlib,
+        }
+
         # Create the mesh components, if there is a mesh.
         # We do this before creating the data-var, so that mesh vars precede
         # data-vars in the file.
-        cf_mesh_name = self._add_mesh(cube)
+        cf_mesh_name = self._add_mesh(cube, compression_kwargs=compression_kwargs)
 
         # Create the associated cube CF-netCDF data variable.
         cf_var_cube = self._create_cf_data_variable(
             cube,
             cube_dimensions,
-            local_keys,
-            zlib=zlib,
-            complevel=complevel,
-            shuffle=shuffle,
-            fletcher32=fletcher32,
+            local_keys=local_keys,
+            packing=packing,
+            fill_value=fill_value,
             contiguous=contiguous,
             chunksizes=chunksizes,
             endian=endian,
             least_significant_digit=least_significant_digit,
-            packing=packing,
-            fill_value=fill_value,
+            **compression_kwargs,
         )
 
         # Associate any mesh with the data-variable.
@@ -614,7 +688,9 @@ class Saver:
 
         # Add the auxiliary coordinate variables and associate the data
         # variable to them
-        self._add_aux_coords(cube, cf_var_cube, cube_dimensions)
+        self._add_aux_coords(
+            cube, cf_var_cube, cube_dimensions, compression_kwargs=compression_kwargs
+        )
 
         # Add the cell_measures variables and associate the data
         # variable to them
@@ -622,7 +698,9 @@ class Saver:
 
         # Add the ancillary_variables variables and associate the data variable
         # to them
-        self._add_ancillary_variables(cube, cf_var_cube, cube_dimensions)
+        self._add_ancillary_variables(
+            cube, cf_var_cube, cube_dimensions, compression_kwargs=compression_kwargs
+        )
 
         # Add the formula terms to the appropriate cf variables for each
         # aux factory in the cube.
@@ -635,9 +713,11 @@ class Saver:
                 local_keys = set()
             else:
                 local_keys = set(local_keys)
-            local_keys.update(_CF_DATA_ATTRS, _UKMO_DATA_ATTRS)
+            local_keys.update(_CF_DATA_ATTRS, _UKMO_DATA_ATTRS, ["GRIB_PARAM"])
 
             # Add global attributes taking into account local_keys.
+            # NOTE: we never need to "convert" managed global attributes, as they are all
+            #  data-local type, i.e. included in "local_keys" above.
             cube_attributes = cube.attributes
             global_attributes = {
                 k: v
@@ -655,8 +735,7 @@ class Saver:
                 msg = "cf_profile is available but no {} defined.".format("cf_patch")
                 warnings.warn(msg, category=iris.warnings.IrisCfSaveWarning)
 
-    @staticmethod
-    def check_attribute_compliance(container, data_dtype):
+    def check_attribute_compliance(self, container, data_dtype):
         """Check attributte complliance."""
 
         def _coerce_value(val_attr, val_attr_value, data_dtype):
@@ -672,8 +751,7 @@ class Saver:
             or container.attributes.get("valid_max") is not None
         ) and container.attributes.get("valid_range") is not None:
             msg = (
-                'Both "valid_range" and "valid_min" or "valid_max" '
-                "attributes present."
+                'Both "valid_range" and "valid_min" or "valid_max" attributes present.'
             )
             raise ValueError(msg)
 
@@ -682,6 +760,7 @@ class Saver:
             val_attr_value = container.attributes.get(val_attr)
             if val_attr_value is not None:
                 val_attr_value = np.asarray(val_attr_value)
+                self._ensure_valid_dtype(val_attr_value, val_attr, val_attr_value)
                 if data_dtype.itemsize == 1:
                     # Allow signed integral type
                     if val_attr_value.dtype.kind == "i":
@@ -740,7 +819,7 @@ class Saver:
                     # used for a different one
                     pass
                 else:
-                    dim_name = self._get_coord_variable_name(cube, coord)
+                    dim_name = self._get_element_variable_name(cube, coord)
                     unlimited_dim_names.append(dim_name)
 
         for dim_name in dimension_names:
@@ -753,7 +832,7 @@ class Saver:
                     size = self._existing_dim[dim_name]
                 self._dataset.createDimension(dim_name, size)
 
-    def _add_mesh(self, cube_or_mesh):
+    def _add_mesh(self, cube_or_mesh, /, *, compression_kwargs=None):
         """Add the cube's mesh, and all related variables to the dataset.
 
         Add the cube's mesh, and all related variables to the dataset.
@@ -768,6 +847,8 @@ class Saver:
         ----------
         cube_or_mesh : :class:`iris.cube.Cube` or :class:`iris.mesh.MeshXY`
             The Cube or Mesh being saved to the netCDF file.
+        compression_kwargs : dict, optional
+            NetCDF data compression keyword arguments.
 
         Returns
         -------
@@ -780,13 +861,16 @@ class Saver:
 
         # Do cube- or -mesh-based save
         from iris.cube import Cube
+        from iris.mesh.components import _MeshIndexSet
 
         if isinstance(cube_or_mesh, Cube):
-            cube = cube_or_mesh
-            mesh = cube.mesh
+            mesh = cube_or_mesh.mesh
         else:
-            cube = None  # The underlying routines must support this !
             mesh = cube_or_mesh
+
+        if isinstance(mesh, _MeshIndexSet):
+            msg = "_MeshIndexSet saving is not yet supported. See https://github.com/SciTools/iris/issues/6123"
+            raise ValueError(msg)
 
         if mesh:
             cf_mesh_name = self._name_coord_map.name(mesh)
@@ -811,10 +895,11 @@ class Saver:
                             if coord is None:
                                 continue  # an awkward thing that mesh.coords does
                             coord_name = self._create_generic_cf_array_var(
-                                cube_or_mesh,
+                                mesh,
                                 [],
                                 coord,
                                 element_dims=(mesh_dims[location],),
+                                compression_kwargs=compression_kwargs,
                             )
                             # Only created once per file, but need to fetch the
                             #  name later in _add_inner_related_vars().
@@ -859,11 +944,12 @@ class Saver:
                     else:
                         fill_value = None
                     cf_conn_name = self._create_generic_cf_array_var(
-                        cube_or_mesh,
+                        mesh,
                         [],
                         conn,
                         element_dims=conn_dims,
                         fill_value=fill_value,
+                        compression_kwargs=compression_kwargs,
                     )
                     # Add essential attributes to the Connectivity variable.
                     cf_conn_var = self._dataset.variables[cf_conn_name]
@@ -883,8 +969,15 @@ class Saver:
         return cf_mesh_name
 
     def _add_inner_related_vars(
-        self, cube, cf_var_cube, dimension_names, coordlike_elements
-    ):
+        self,
+        cube,
+        cf_var_cube,
+        dimension_names,
+        coordlike_elements,
+        /,
+        *,
+        compression_kwargs=None,
+    ) -> None:
         """Create a set of variables for aux-coords, ancillaries or cell-measures.
 
         Create a set of variables for aux-coords, ancillaries or cell-measures,
@@ -913,7 +1006,10 @@ class Saver:
                 if cf_name is None:
                     # Not already present : create it
                     cf_name = self._create_generic_cf_array_var(
-                        cube, dimension_names, element
+                        cube,
+                        dimension_names,
+                        element,
+                        compression_kwargs=compression_kwargs,
                     )
                     self._name_coord_map.append(cf_name, element)
 
@@ -929,7 +1025,9 @@ class Saver:
                 variable_names = " ".join(sorted(element_names))
                 _setncattr(cf_var_cube, role_attribute_name, variable_names)
 
-    def _add_aux_coords(self, cube, cf_var_cube, dimension_names):
+    def _add_aux_coords(
+        self, cube, cf_var_cube, dimension_names, /, *, compression_kwargs=None
+    ) -> None:
         """Add aux. coordinate to the dataset and associate with the data variable.
 
         Parameters
@@ -940,26 +1038,22 @@ class Saver:
             A cf variable cube representation.
         dimension_names : list
             Names associated with the dimensions of the cube.
-        """
-        from iris.mesh.components import (
-            MeshEdgeCoords,
-            MeshFaceCoords,
-            MeshNodeCoords,
-            MeshXY,
-        )
+        compression_kwargs : dict, optional
+            NetCDF data compression keyword arguments.
 
+        """
         # Exclude any mesh coords, which are bundled in with the aux-coords.
         coords_to_add = [
             coord for coord in cube.aux_coords if not hasattr(coord, "mesh")
         ]
 
         # Include any relevant mesh location coordinates.
-        mesh: MeshXY | None = getattr(cube, "mesh")
-        mesh_location: str | None = getattr(cube, "location")
+        mesh: MeshXY | None = getattr(cube, "mesh")  # type: ignore[annotation-unchecked]
+        mesh_location: str | None = getattr(cube, "location")  # type: ignore[annotation-unchecked]
         if mesh and mesh_location:
             location_coords: MeshNodeCoords | MeshEdgeCoords | MeshFaceCoords = getattr(
                 mesh, f"{mesh_location}_coords"
-            )
+            )  # type: ignore[annotation-unchecked]
             coords_to_add.extend(list(location_coords))
 
         return self._add_inner_related_vars(
@@ -967,6 +1061,7 @@ class Saver:
             cf_var_cube,
             dimension_names,
             coords_to_add,
+            compression_kwargs=compression_kwargs,
         )
 
     def _add_cell_measures(self, cube, cf_var_cube, dimension_names):
@@ -988,7 +1083,9 @@ class Saver:
             cube.cell_measures(),
         )
 
-    def _add_ancillary_variables(self, cube, cf_var_cube, dimension_names):
+    def _add_ancillary_variables(
+        self, cube, cf_var_cube, dimension_names, /, *, compression_kwargs=None
+    ):
         """Add ancillary variables measures to the dataset and associate with the data variable.
 
         Parameters
@@ -999,12 +1096,16 @@ class Saver:
             A cf variable cube representation.
         dimension_names : list
             Names associated with the dimensions of the cube.
+        compression_kwargs : dict, optional
+            NetCDF data compression keyword arguments.
+
         """
         return self._add_inner_related_vars(
             cube,
             cf_var_cube,
             dimension_names,
             cube.ancillary_variables(),
+            compression_kwargs=compression_kwargs,
         )
 
     def _add_dim_coords(self, cube, dimension_names):
@@ -1069,11 +1170,13 @@ class Saver:
                 cf_name = self._name_coord_map.name(primary_coord)
                 cf_var = self._dataset.variables[cf_name]
 
-                names = {
-                    key: self._name_coord_map.name(coord)
-                    for key, coord in factory.dependencies.items()
+                term_varnames = {
+                    term: self._name_coord_map.name(coord)
+                    for term, coord in factory.dependencies.items()
                 }
-                formula_terms = factory_defn.formula_terms_format.format(**names)
+                formula_terms = factory_defn.formula_terms_format.format(
+                    **term_varnames
+                )
                 std_name = factory_defn.std_name
 
                 if hasattr(cf_var, "formula_terms"):
@@ -1114,6 +1217,39 @@ class Saver:
                     _setncattr(cf_var, "standard_name", std_name)
                     _setncattr(cf_var, "axis", "Z")
                     _setncattr(cf_var, "formula_terms", formula_terms)
+
+                if FUTURE.derived_bounds:
+                    # ensure that the primary variable *bounds*, if any, obey the CF
+                    #  encoding rule : the bounds variable of a parametric coordinate
+                    #  must itself have a "formula_terms" attribute.
+                    # See : https://cfconventions.org/Data/cf-conventions/cf-conventions-1.12/cf-conventions.html#boundaries-and-formula-terms
+                    bounds_varname = getattr(cf_var, "bounds", None)
+                    cf_bounds_var = self._dataset.variables.get(bounds_varname, None)
+                    if (
+                        cf_bounds_var is not None
+                        and getattr(cf_bounds_var, "formula_terms", None) is None
+                    ):
+                        # We need a bounds formula, and there is none already attached.
+                        # Construct and add one, mirroring the main formula.
+                        def boundsterm_varname(term_varname):
+                            """Identify the boundsvar for a given term var."""
+                            # First establish a fallback default, meaning 'no bounds'.
+                            result = term_varname
+                            # Follow links (if they exist) to find the bounds var.
+                            termvar = self._dataset.variables.get(term_varname)
+                            boundsname = getattr(termvar, "bounds", None)
+                            if boundsname in self._dataset.variables:
+                                result = boundsname
+                            return result
+
+                        boundsterm_varnames = {
+                            term: boundsterm_varname(term_varname)
+                            for term, term_varname in term_varnames.items()
+                        }
+                        bounds_formula_terms = factory_defn.formula_terms_format.format(
+                            **boundsterm_varnames
+                        )
+                        _setncattr(cf_bounds_var, "formula_terms", bounds_formula_terms)
 
     def _get_dim_names(self, cube_or_mesh):
         """Determine suitable CF-netCDF data dimension names.
@@ -1203,8 +1339,7 @@ class Saver:
                 # coord for nodes, but a connectivity for faces/edges
                 if location == "node":
                     # For nodes, identify the dim with a coordinate variable.
-                    # Selecting the X-axis one for definiteness.
-                    dim_coords = mesh.coords(location="node", axis="x")
+                    dim_coords = mesh.coords(location="node")
                 else:
                     # For face/edge, use the relevant "optionally required"
                     # connectivity variable.
@@ -1214,7 +1349,6 @@ class Saver:
                     # As the mesh contains this location, we want to include this
                     # dim in our returned mesh dims.
                     # We should have 1 identifying variable (of either type).
-                    assert len(dim_coords) == 1
                     dim_element = dim_coords[0]
                     dim_name = self._dim_names_and_coords.name(dim_element)
                     if dim_name is None:
@@ -1287,7 +1421,7 @@ class Saver:
                         if dim_name is None:
                             # Not already present : create  a unique dimension name
                             # from the coord.
-                            dim_name = self._get_coord_variable_name(cube, coord)
+                            dim_name = self._get_element_variable_name(cube, coord)
                             # Disambiguate if it has the same name as an
                             # existing dimension.
                             # OR if it matches an existing file variable name.
@@ -1387,9 +1521,13 @@ class Saver:
             val_min, val_max = (values.min(), values.max())
             if is_lazy_data(values):
                 val_min, val_max = _co_realise_lazy_arrays([val_min, val_max])
+            # NumPy will inherit values.dtype even if the scalar numbers work
+            #  with a smaller type.
+            min_dtype = np.promote_types(
+                *[np.min_scalar_type(m) for m in (val_min, val_max)]
+            )
             # Cast to an integer type supported by netCDF3.
-            can_cast = all([np.can_cast(m, np.int32) for m in (val_min, val_max)])
-            if not can_cast:
+            if not np.can_cast(min_dtype, np.int32):
                 msg = (
                     "The data type of {} {!r} is not supported by {} and"
                     " its values cannot be safely cast to a supported"
@@ -1400,7 +1538,7 @@ class Saver:
             values = values.astype(np.int32)
         return values
 
-    def _create_cf_bounds(self, coord, cf_var, cf_name):
+    def _create_cf_bounds(self, coord, cf_var, cf_name, /, *, compression_kwargs=None):
         """Create the associated CF-netCDF bounds variable.
 
         Parameters
@@ -1411,6 +1549,8 @@ class Saver:
             CF-netCDF variable.
         cf_name : str
             Name of the CF-NetCDF variable.
+        compression_kwargs : dict, optional
+            NetCDF data compression keyword arguments.
 
         Returns
         -------
@@ -1418,6 +1558,9 @@ class Saver:
 
         """
         if hasattr(coord, "has_bounds") and coord.has_bounds():
+            if compression_kwargs is None:
+                compression_kwargs = {}
+
             # Get the values in a form which is valid for the file format.
             bounds = self._ensure_valid_dtype(
                 coord.core_bounds(), "the bounds of coordinate", coord
@@ -1450,41 +1593,23 @@ class Saver:
                 boundsvar_name,
                 bounds.dtype.newbyteorder("="),
                 cf_var.dimensions + (bounds_dimension_name,),
+                **compression_kwargs,
             )
             self._lazy_stream_data(data=bounds, cf_var=cf_var_bounds)
 
-    def _get_cube_variable_name(self, cube):
-        """Return a CF-netCDF variable name for the given cube.
-
-        Parameters
-        ----------
-        cube : :class:`iris.cube.Cube`
-            An instance of a cube for which a CF-netCDF variable
-            name is required.
-
-        Returns
-        -------
-        str
-            A CF-netCDF variable name as a string.
-
-        """
-        if cube.var_name is not None:
-            cf_name = cube.var_name
-        else:
-            # Convert to lower case and replace whitespace by underscores.
-            cf_name = "_".join(cube.name().lower().split())
-
-        cf_name = self.cf_valid_var_name(cf_name)
-        return cf_name
-
-    def _get_coord_variable_name(self, cube_or_mesh, coord):
-        """Return a CF-netCDF variable name for a given coordinate-like element.
+    def _get_element_variable_name(
+        self, cube_or_mesh: "Cube|MeshXY", element: "_DimensionalMetadata|Cube"
+    ) -> str:
+        # keep it as _DimensionalMetadata
+        # Don't want it as CFVariableMixin - implies a cube can be passed in
+        # Could be Coord AncillaryVariable Cellmeasure
+        """Return a CF-netCDF variable name for a given coordinate-like element, or cube.
 
         Parameters
         ----------
         cube_or_mesh : :class:`iris.cube.Cube` or :class:`iris.mesh.MeshXY`
             The Cube or Mesh being saved to the netCDF file.
-        coord : :class:`iris.coords._DimensionalMetadata`
+        element : :class:`iris.coords._DimensionalMetadata` | :class:``iris.cube.Cube``
             An instance of a coordinate (or similar), for which a CF-netCDF
             variable name is required.
 
@@ -1504,17 +1629,21 @@ class Saver:
             cube = None
             mesh = cube_or_mesh
 
-        if coord.var_name is not None:
-            cf_name = coord.var_name
+        if element.var_name is not None:
+            cf_name = element.var_name
+        elif isinstance(element, Cube):
+            # Make name for a Cube without a var_name.
+            cf_name = "_".join(element.name().lower().split())
         else:
-            name = coord.standard_name or coord.long_name
+            # Make name for a Coord-like element without a var_name
+            name = element.standard_name or element.long_name
             if not name or set(name).intersection(string.whitespace):
                 # We need to invent a name, based on its associated dimensions.
-                if cube is not None and cube.coords(coord):
+                if cube is not None and cube.coords(element):
                     # It is a regular cube coordinate.
                     # Auto-generate a name based on the dims.
                     name = ""
-                    for dim in cube.coord_dims(coord):
+                    for dim in cube.coord_dims(element):
                         name += f"dim{dim}"
                     # Handle scalar coordinate (dims == ()).
                     if not name:
@@ -1526,12 +1655,14 @@ class Saver:
 
                     from iris.mesh import Connectivity
 
-                    # At present, a location-coord cannot be nameless, as the
-                    # MeshXY code relies on guess_coord_axis.
-                    assert isinstance(coord, Connectivity)
-                    location = coord.cf_role.split("_")[0]
-                    location_dim_attr = f"{location}_dimension"
-                    name = getattr(mesh, location_dim_attr)
+                    if isinstance(element, Connectivity):
+                        location = element.cf_role.split("_")[0]
+                        location_dim_attr = f"{location}_dimension"
+                        name = getattr(mesh, location_dim_attr)
+                    else:
+                        # 'coord' is a nameless coordinate of a mesh,
+                        # so we set it as unknown for saving
+                        name = "unknown"
 
             # Convert to lower case and replace whitespace by underscores.
             cf_name = "_".join(name.lower().split())
@@ -1605,6 +1736,8 @@ class Saver:
         return cf_mesh_name
 
     def _set_cf_var_attributes(self, cf_var, element):
+        from iris.cube import Cube
+
         # Deal with CF-netCDF units, and add the name+units properties.
         if isinstance(element, iris.coords.Coord):
             # Fix "degree" units if needed.
@@ -1612,42 +1745,75 @@ class Saver:
         else:
             units_str = str(element.units)
 
-        if cf_units.as_unit(units_str).is_udunits():
-            _setncattr(cf_var, "units", units_str)
+        # NB this bit is a nasty hack to preserve existing behaviour through a refactor:
+        #  The attributes for Coords are created in the order units, standard_name,
+        #   whereas for data-variables (aka Cubes) it is the other way around.
+        # Needed now that this routine is also called from _create_cf_data_variable.
+        # TODO: when we can break things, rationalise these to be the same.
+        def add_units_attr():
+            if cf_units.as_unit(units_str).is_udunits():
+                _setncattr(cf_var, "units", units_str)
 
-        standard_name = element.standard_name
-        if standard_name is not None:
-            _setncattr(cf_var, "standard_name", standard_name)
+        def add_names_attrs():
+            standard_name = element.standard_name
+            if standard_name is not None:
+                _setncattr(cf_var, "standard_name", standard_name)
 
-        long_name = element.long_name
-        if long_name is not None:
-            _setncattr(cf_var, "long_name", long_name)
+            long_name = element.long_name
+            if long_name is not None:
+                _setncattr(cf_var, "long_name", long_name)
+
+        if isinstance(element, Cube):
+            add_names_attrs()
+            add_units_attr()
+        else:
+            add_units_attr()
+            add_names_attrs()
 
         # Add the CF-netCDF calendar attribute.
         if element.units.calendar:
             _setncattr(cf_var, "calendar", str(element.units.calendar))
 
-        # Add any other custom coordinate attributes.
-        for name in sorted(element.attributes):
-            value = element.attributes[name]
+        # Take a copy so we can remove things
+        element_attrs = element.attributes.copy()
 
-            if name == "STASH":
-                # Adopting provisional Metadata Conventions for representing MO
-                # Scientific Data encoded in NetCDF Format.
-                name = "um_stash_source"
-                value = str(value)
+        # Note: when writing UGRID, "element" can be a Mesh which has no "dtype",
+        # and for dataless cubes it will have a 'None' dtype.
+        if getattr(element, "dtype", None) is not None:
+            # Most attributes are dealt with later.  But _Encoding needs to be defined
+            #  *before* we can write to a character variable.
+            if element.dtype.kind in "SU" and "_Encoding" in element_attrs:
+                encoding = element_attrs.pop("_Encoding")
+                _setncattr(cf_var, "_Encoding", encoding)
 
-            # Don't clobber existing attributes.
-            if not hasattr(cf_var, name):
-                _setncattr(cf_var, name, value)
+        if not isinstance(element, Cube):
+            # Add any other custom coordinate attributes.
+            # N.B. not Cube, which has specific handling in  _create_cf_data_variable
+            for name in sorted(element_attrs):
+                value = element_attrs[name]
+
+                if name == "STASH":
+                    # Adopting provisional Metadata Conventions for representing MO
+                    # Scientific Data encoded in NetCDF Format.
+                    name = "um_stash_source"
+                    value = str(value)
+
+                # Don't clobber existing attributes.
+                if not hasattr(cf_var, name):
+                    _setncattr(cf_var, name, value)
 
     def _create_generic_cf_array_var(
         self,
         cube_or_mesh,
         cube_dim_names,
         element,
+        /,
+        *,
         element_dims=None,
         fill_value=None,
+        compression_kwargs=None,
+        packing_controls: dict | None = None,
+        is_dataless=False,
     ):
         """Create theCF-netCDF variable given dimensional_metadata.
 
@@ -1668,7 +1834,7 @@ class Saver:
             An Iris :class:`iris.coords._DimensionalMetadata`, belonging to the
             cube.  Provides data, units and standard/long/var names.
             Not used if 'element_dims' is not None.
-        element_dims : list of str, optionsl
+        element_dims : list of str, optional
             If set, contains the variable dimension (names),
             otherwise these are taken from `element.cube_dims[cube]`.
             For Mesh components (element coordinates and connectivities), this
@@ -1679,6 +1845,8 @@ class Saver:
             If not set, standard netcdf4-python behaviour : the variable has no
             '_FillValue' property, and uses the "standard" fill-value for its
             type.
+        compression_kwargs : dict, optional
+            NetCDF data compression keyword arguments.
 
         Returns
         -------
@@ -1693,13 +1861,16 @@ class Saver:
         else:
             cube = None
 
+        if compression_kwargs is None:
+            compression_kwargs = {}
+
         # Work out the var-name to use.
         # N.B. the only part of this routine that may use a mesh _or_ a cube.
-        cf_name = self._get_coord_variable_name(cube_or_mesh, element)
+        cf_name = self._get_element_variable_name(cube_or_mesh, element)
         while cf_name in self._dataset.variables:
             cf_name = self._increment_name(cf_name)
 
-        if element_dims is None:
+        if cube and element_dims is None:
             # Get the list of file-dimensions (names), to create the variable.
             element_dims = [
                 cube_dim_names[dim] for dim in element.cube_dims(cube)
@@ -1708,14 +1879,46 @@ class Saver:
         # Get the data values, in a way which works for any element type, as
         # all are subclasses of _DimensionalMetadata.
         # (e.g. =points if a coord, =data if an ancillary, etc)
-        data = element._core_values()
+        if isinstance(element, Cube):
+            data = element.core_data()
+        else:
+            data = element._core_values()
 
-        if np.issubdtype(data.dtype, np.str_):
-            # Deal with string-type variables.
+        # This compression contract is *not* applicable to a mesh.
+        if cube is not None and data is not None and cube.shape != data.shape:
+            compression_kwargs = {}
+
+        if not is_dataless and data.dtype.kind == "U":
+            # Deal with unicode-string-type variables.
             # Typically CF label variables, but also possibly ancil-vars ?
+
+            # NOTE: all we are doing here is to calculate the byte dimension length,
+            # based on the dtype and any encoding attribute.
+            # The actual char --> byte data *translation* is done by the variable,
+            # being a _bytecoding_datasets.EncodedVariable.
             string_dimension_depth = data.dtype.itemsize
-            if data.dtype.kind == "U":
-                string_dimension_depth //= 4
+
+            # String content (U) instead of bytes (S).
+            # For numpy strings, itemsize is **always** a multiple of 4
+            if string_dimension_depth % 4 != 0:
+                msg = (
+                    "Unexpected numpy string 'dtype.itemsize' for element "
+                    f"{cube_or_mesh.name()!r}: "
+                    f"'dtype.itemsize = {string_dimension_depth}, expected "
+                    "a multiple of four (always)."
+                )
+                raise ValueError(msg)
+            nchars = string_dimension_depth // 4
+
+            encoding_attr = element.attributes.get("_Encoding", "ascii")
+            # Look this up + return a supported encoding name
+            # NB implements defaults and raises a warning if given not recognised.
+            encoding = bytecoding_datasets._identify_encoding(
+                encoding=encoding_attr, var_name=cf_name, writing=True
+            )
+            width_fns = bytecoding_datasets._ENCODING_WIDTH_TRANSLATIONS[encoding]
+            string_dimension_depth = width_fns.nchars_2_nbytes(nchars)
+
             string_dimension_name = "string%d" % string_dimension_depth
 
             # Determine whether to create the string length dimension.
@@ -1733,29 +1936,39 @@ class Saver:
 
             # Create the label coordinate variable.
             cf_var = self._dataset.createVariable(cf_name, "|S1", element_dims)
-
-            # Convert data from an array of strings into a character array
-            # with an extra string-length dimension.
-            if len(element_dims) == 1:
-                data_first = data[0]
-                if is_lazy_data(data_first):
-                    data_first = data_first.compute()
-                data = list("%- *s" % (string_dimension_depth, data_first))
-            else:
-                orig_shape = data.shape
-                new_shape = orig_shape + (string_dimension_depth,)
-                new_data = np.zeros(new_shape, cf_var.dtype)
-                for index in np.ndindex(orig_shape):
-                    index_slice = tuple(list(index) + [slice(None, None)])
-                    new_data[index_slice] = list(
-                        "%- *s" % (string_dimension_depth, data[index])
-                    )
-                data = new_data
         else:
-            # A normal (numeric) variable.
+            # A non-string variable.
             # ensure a valid datatype for the file format.
-            element_type = type(element).__name__
-            data = self._ensure_valid_dtype(data, element_type, element)
+            if is_dataless:
+                dtype = self._DATALESS_DTYPE
+                fill_value = self._DATALESS_FILLVALUE
+            else:
+                # Normal non-string data.
+                # NOTE: this includes byte-arrays (S1 only) : however these must
+                # use an actual cube dimension for the 'string dimension', which
+                # seriously limits the utility of DECODE_TO_STRINGS_ON_READ.
+                # TODO: also support netCDF variable-length strings ("string" type).
+                #  Currently hit a **write error here**, being numpy object dtype ("O").
+                if data.dtype.kind not in "iufSU" or (
+                    data.dtype.kind == "S" and data.dtype.itemsize != 1
+                ):
+                    # This is a type of data we don't "understand".
+                    # NB this includes "Sxx" types other than "S1" :  It seems that
+                    # netCDF4 saves Sxx as variable-length strings.
+                    # But we don't support that type in Iris.
+                    msg = (
+                        f"Variable {cf_name!r} has unexpected dtype, {data.dtype!r}."
+                        f"Data content arrays must be numeric, or contain "
+                        "single-bytes (dtype 'S1'), or unicode strings (dtype 'U<n>')."
+                    )
+                    raise ValueError(msg)
+
+                element_type = type(element).__name__
+                data = self._ensure_valid_dtype(data, element_type, element)
+                if not packing_controls:
+                    dtype = data.dtype.newbyteorder("=")
+                else:
+                    dtype = packing_controls["dtype"]
 
             # Check if this is a dim-coord.
             is_dimcoord = cube is not None and element in cube.dim_coords
@@ -1769,9 +1982,10 @@ class Saver:
             # Create the CF-netCDF variable.
             cf_var = self._dataset.createVariable(
                 cf_name,
-                data.dtype.newbyteorder("="),
+                dtype,
                 element_dims,
                 fill_value=fill_value,
+                **compression_kwargs,
             )
 
             # Add the axis attribute for spatio-temporal CF-netCDF coordinates.
@@ -1781,13 +1995,21 @@ class Saver:
                     _setncattr(cf_var, "axis", axis.upper())
 
             # Create the associated CF-netCDF bounds variable, if any.
-            self._create_cf_bounds(element, cf_var, cf_name)
-
-        # Add the data to the CF-netCDF variable.
-        self._lazy_stream_data(data=data, cf_var=cf_var)
+            self._create_cf_bounds(
+                element, cf_var, cf_name, compression_kwargs=compression_kwargs
+            )
 
         # Add names + units
+        # NOTE: *must* now do first, as we may need '_Encoding' set to write it !
         self._set_cf_var_attributes(cf_var, element)
+
+        # Add the data to the CF-netCDF variable.
+        if not is_dataless:
+            if packing_controls:
+                # We must set packing attributes (if any), before assigning values.
+                for key, value in packing_controls["attributes"]:
+                    _setncattr(cf_var, key, value)
+            self._lazy_stream_data(data=data, cf_var=cf_var)
 
         return cf_name
 
@@ -1842,6 +2064,214 @@ class Saver:
 
         return " ".join(cell_methods)
 
+    def _add_grid_mapping_to_dataset(self, cs, extended_grid_mapping=False):
+        """Create a CF-netCDF grid mapping variable and add to the dataset.
+
+        Parameters
+        ----------
+        cs : :class:`iris.coord_system.CoordSystem`
+            The :class:`iris.coord_system.CoordSystem` used to generate the
+            new netCDF CF grid mapping variable.
+
+        Returns
+        -------
+        None
+        """
+        cf_var_grid = self._dataset.createVariable(cs.grid_mapping_name, np.int32)
+        _setncattr(cf_var_grid, "grid_mapping_name", cs.grid_mapping_name)
+
+        def add_ellipsoid(ellipsoid):
+            cf_var_grid.longitude_of_prime_meridian = (
+                ellipsoid.longitude_of_prime_meridian
+            )
+            semi_major = ellipsoid.semi_major_axis
+            semi_minor = ellipsoid.semi_minor_axis
+            if semi_minor == semi_major:
+                cf_var_grid.earth_radius = semi_major
+            else:
+                cf_var_grid.semi_major_axis = semi_major
+                cf_var_grid.semi_minor_axis = semi_minor
+            if ellipsoid.datum is not None:
+                cf_var_grid.horizontal_datum_name = ellipsoid.datum
+
+        # latlon
+        if isinstance(cs, iris.coord_systems.GeogCS):
+            add_ellipsoid(cs)
+
+        # rotated latlon
+        elif isinstance(cs, iris.coord_systems.RotatedGeogCS):
+            if cs.ellipsoid:
+                add_ellipsoid(cs.ellipsoid)
+            cf_var_grid.grid_north_pole_latitude = cs.grid_north_pole_latitude
+            cf_var_grid.grid_north_pole_longitude = cs.grid_north_pole_longitude
+            cf_var_grid.north_pole_grid_longitude = cs.north_pole_grid_longitude
+
+        # tmerc
+        elif isinstance(cs, iris.coord_systems.TransverseMercator):
+            if cs.ellipsoid:
+                add_ellipsoid(cs.ellipsoid)
+            cf_var_grid.longitude_of_central_meridian = cs.longitude_of_central_meridian
+            cf_var_grid.latitude_of_projection_origin = cs.latitude_of_projection_origin
+            cf_var_grid.false_easting = cs.false_easting
+            cf_var_grid.false_northing = cs.false_northing
+            cf_var_grid.scale_factor_at_central_meridian = (
+                cs.scale_factor_at_central_meridian
+            )
+
+        # merc
+        elif isinstance(cs, iris.coord_systems.Mercator):
+            if cs.ellipsoid:
+                add_ellipsoid(cs.ellipsoid)
+            cf_var_grid.longitude_of_projection_origin = (
+                cs.longitude_of_projection_origin
+            )
+            cf_var_grid.false_easting = cs.false_easting
+            cf_var_grid.false_northing = cs.false_northing
+            # Only one of these should be set
+            if cs.standard_parallel is not None:
+                cf_var_grid.standard_parallel = cs.standard_parallel
+            elif cs.scale_factor_at_projection_origin is not None:
+                cf_var_grid.scale_factor_at_projection_origin = (
+                    cs.scale_factor_at_projection_origin
+                )
+
+        # lcc
+        elif isinstance(cs, iris.coord_systems.LambertConformal):
+            if cs.ellipsoid:
+                add_ellipsoid(cs.ellipsoid)
+            cf_var_grid.standard_parallel = cs.secant_latitudes
+            cf_var_grid.latitude_of_projection_origin = cs.central_lat
+            cf_var_grid.longitude_of_central_meridian = cs.central_lon
+            cf_var_grid.false_easting = cs.false_easting
+            cf_var_grid.false_northing = cs.false_northing
+
+        # polar stereo (have to do this before Stereographic because it subclasses it)
+        elif isinstance(cs, iris.coord_systems.PolarStereographic):
+            if cs.ellipsoid:
+                add_ellipsoid(cs.ellipsoid)
+            cf_var_grid.latitude_of_projection_origin = cs.central_lat
+            cf_var_grid.straight_vertical_longitude_from_pole = cs.central_lon
+            cf_var_grid.false_easting = cs.false_easting
+            cf_var_grid.false_northing = cs.false_northing
+            # Only one of these should be set
+            if cs.true_scale_lat is not None:
+                cf_var_grid.true_scale_lat = cs.true_scale_lat
+            elif cs.scale_factor_at_projection_origin is not None:
+                cf_var_grid.scale_factor_at_projection_origin = (
+                    cs.scale_factor_at_projection_origin
+                )
+            else:
+                cf_var_grid.scale_factor_at_projection_origin = 1.0
+
+        # stereo
+        elif isinstance(cs, iris.coord_systems.Stereographic):
+            if cs.ellipsoid:
+                add_ellipsoid(cs.ellipsoid)
+            cf_var_grid.longitude_of_projection_origin = cs.central_lon
+            cf_var_grid.latitude_of_projection_origin = cs.central_lat
+            cf_var_grid.false_easting = cs.false_easting
+            cf_var_grid.false_northing = cs.false_northing
+            # Only one of these should be set
+            if cs.true_scale_lat is not None:
+                msg = (
+                    "It is not valid CF to save a true_scale_lat for "
+                    "a Stereographic grid mapping."
+                )
+                raise ValueError(msg)
+            elif cs.scale_factor_at_projection_origin is not None:
+                cf_var_grid.scale_factor_at_projection_origin = (
+                    cs.scale_factor_at_projection_origin
+                )
+            else:
+                cf_var_grid.scale_factor_at_projection_origin = 1.0
+
+        # osgb (a specific tmerc)
+        elif isinstance(cs, iris.coord_systems.OSGB):
+            warnings.warn(
+                "OSGB coordinate system not yet handled",
+                category=iris.warnings.IrisSaveWarning,
+            )
+
+        # lambert azimuthal equal area
+        elif isinstance(cs, iris.coord_systems.LambertAzimuthalEqualArea):
+            if cs.ellipsoid:
+                add_ellipsoid(cs.ellipsoid)
+            cf_var_grid.longitude_of_projection_origin = (
+                cs.longitude_of_projection_origin
+            )
+            cf_var_grid.latitude_of_projection_origin = cs.latitude_of_projection_origin
+            cf_var_grid.false_easting = cs.false_easting
+            cf_var_grid.false_northing = cs.false_northing
+
+        # albers conical equal area
+        elif isinstance(cs, iris.coord_systems.AlbersEqualArea):
+            if cs.ellipsoid:
+                add_ellipsoid(cs.ellipsoid)
+            cf_var_grid.longitude_of_central_meridian = cs.longitude_of_central_meridian
+            cf_var_grid.latitude_of_projection_origin = cs.latitude_of_projection_origin
+            cf_var_grid.false_easting = cs.false_easting
+            cf_var_grid.false_northing = cs.false_northing
+            cf_var_grid.standard_parallel = cs.standard_parallels
+
+        # vertical perspective
+        elif isinstance(cs, iris.coord_systems.VerticalPerspective):
+            if cs.ellipsoid:
+                add_ellipsoid(cs.ellipsoid)
+            cf_var_grid.longitude_of_projection_origin = (
+                cs.longitude_of_projection_origin
+            )
+            cf_var_grid.latitude_of_projection_origin = cs.latitude_of_projection_origin
+            cf_var_grid.false_easting = cs.false_easting
+            cf_var_grid.false_northing = cs.false_northing
+            cf_var_grid.perspective_point_height = cs.perspective_point_height
+
+        # geostationary
+        elif isinstance(cs, iris.coord_systems.Geostationary):
+            if cs.ellipsoid:
+                add_ellipsoid(cs.ellipsoid)
+            cf_var_grid.longitude_of_projection_origin = (
+                cs.longitude_of_projection_origin
+            )
+            cf_var_grid.latitude_of_projection_origin = cs.latitude_of_projection_origin
+            cf_var_grid.false_easting = cs.false_easting
+            cf_var_grid.false_northing = cs.false_northing
+            cf_var_grid.perspective_point_height = cs.perspective_point_height
+            cf_var_grid.sweep_angle_axis = cs.sweep_angle_axis
+
+        # oblique mercator (and rotated variant)
+        # Use duck-typing over isinstance() - subclasses (i.e.
+        #  RotatedMercator) upset mock tests.
+        elif getattr(cs, "grid_mapping_name", None) == "oblique_mercator":
+            # RotatedMercator subclasses ObliqueMercator, and RM
+            #  instances are implicitly saved as OM due to inherited
+            #  properties. This is correct because CF 1.11 is removing
+            #  all mention of RM.
+            if cs.ellipsoid:
+                add_ellipsoid(cs.ellipsoid)
+            cf_var_grid.azimuth_of_central_line = cs.azimuth_of_central_line
+            cf_var_grid.latitude_of_projection_origin = cs.latitude_of_projection_origin
+            cf_var_grid.longitude_of_projection_origin = (
+                cs.longitude_of_projection_origin
+            )
+            cf_var_grid.false_easting = cs.false_easting
+            cf_var_grid.false_northing = cs.false_northing
+            cf_var_grid.scale_factor_at_projection_origin = (
+                cs.scale_factor_at_projection_origin
+            )
+
+        # other
+        else:
+            warnings.warn(
+                "Unable to represent the horizontal "
+                "coordinate system. The coordinate system "
+                "type %r is not yet implemented." % type(cs),
+                category=iris.warnings.IrisSaveWarning,
+            )
+
+        # add WKT string
+        if extended_grid_mapping:
+            cf_var_grid.crs_wkt = cs.as_cartopy_crs().to_wkt()
+
     def _create_cf_grid_mapping(self, cube, cf_var_cube):
         """Create CF-netCDF grid mapping and associated CF-netCDF variable.
 
@@ -1861,227 +2291,112 @@ class Saver:
         None
 
         """
-        cs = cube.coord_system("CoordSystem")
-        if cs is not None:
+        coord_systems = []
+        if cube.extended_grid_mapping:
+            # get unique list of all coord_systems on cube coords:
+            for coord in cube.coords():
+                if coord.coord_system and coord.coord_system not in coord_systems:
+                    coord_systems.append(coord.coord_system)
+        else:
+            # will only return a single coord system (if one exists):
+            if cs := cube.coord_system("CoordSystem"):
+                coord_systems.append(cs)
+
+        grid_mappings = {}
+        matched_all_coords = True
+
+        for cs in coord_systems:
             # Grid var not yet created?
             if cs not in self._coord_systems:
+                # handle potential duplicate netCDF variable names:
                 while cs.grid_mapping_name in self._dataset.variables:
                     aname = self._increment_name(cs.grid_mapping_name)
                     cs.grid_mapping_name = aname
 
-                cf_var_grid = self._dataset.createVariable(
-                    cs.grid_mapping_name, np.int32
+                # create grid mapping variable on dataset for this coordinate system:
+                self._add_grid_mapping_to_dataset(
+                    cs, extended_grid_mapping=cube.extended_grid_mapping
                 )
-                _setncattr(cf_var_grid, "grid_mapping_name", cs.grid_mapping_name)
-
-                def add_ellipsoid(ellipsoid):
-                    cf_var_grid.longitude_of_prime_meridian = (
-                        ellipsoid.longitude_of_prime_meridian
-                    )
-                    semi_major = ellipsoid.semi_major_axis
-                    semi_minor = ellipsoid.semi_minor_axis
-                    if semi_minor == semi_major:
-                        cf_var_grid.earth_radius = semi_major
-                    else:
-                        cf_var_grid.semi_major_axis = semi_major
-                        cf_var_grid.semi_minor_axis = semi_minor
-                    if ellipsoid.datum is not None:
-                        cf_var_grid.horizontal_datum_name = ellipsoid.datum
-
-                # latlon
-                if isinstance(cs, iris.coord_systems.GeogCS):
-                    add_ellipsoid(cs)
-
-                # rotated latlon
-                elif isinstance(cs, iris.coord_systems.RotatedGeogCS):
-                    if cs.ellipsoid:
-                        add_ellipsoid(cs.ellipsoid)
-                    cf_var_grid.grid_north_pole_latitude = cs.grid_north_pole_latitude
-                    cf_var_grid.grid_north_pole_longitude = cs.grid_north_pole_longitude
-                    cf_var_grid.north_pole_grid_longitude = cs.north_pole_grid_longitude
-
-                # tmerc
-                elif isinstance(cs, iris.coord_systems.TransverseMercator):
-                    if cs.ellipsoid:
-                        add_ellipsoid(cs.ellipsoid)
-                    cf_var_grid.longitude_of_central_meridian = (
-                        cs.longitude_of_central_meridian
-                    )
-                    cf_var_grid.latitude_of_projection_origin = (
-                        cs.latitude_of_projection_origin
-                    )
-                    cf_var_grid.false_easting = cs.false_easting
-                    cf_var_grid.false_northing = cs.false_northing
-                    cf_var_grid.scale_factor_at_central_meridian = (
-                        cs.scale_factor_at_central_meridian
-                    )
-
-                # merc
-                elif isinstance(cs, iris.coord_systems.Mercator):
-                    if cs.ellipsoid:
-                        add_ellipsoid(cs.ellipsoid)
-                    cf_var_grid.longitude_of_projection_origin = (
-                        cs.longitude_of_projection_origin
-                    )
-                    cf_var_grid.false_easting = cs.false_easting
-                    cf_var_grid.false_northing = cs.false_northing
-                    # Only one of these should be set
-                    if cs.standard_parallel is not None:
-                        cf_var_grid.standard_parallel = cs.standard_parallel
-                    elif cs.scale_factor_at_projection_origin is not None:
-                        cf_var_grid.scale_factor_at_projection_origin = (
-                            cs.scale_factor_at_projection_origin
-                        )
-
-                # lcc
-                elif isinstance(cs, iris.coord_systems.LambertConformal):
-                    if cs.ellipsoid:
-                        add_ellipsoid(cs.ellipsoid)
-                    cf_var_grid.standard_parallel = cs.secant_latitudes
-                    cf_var_grid.latitude_of_projection_origin = cs.central_lat
-                    cf_var_grid.longitude_of_central_meridian = cs.central_lon
-                    cf_var_grid.false_easting = cs.false_easting
-                    cf_var_grid.false_northing = cs.false_northing
-
-                # polar stereo (have to do this before Stereographic because it subclasses it)
-                elif isinstance(cs, iris.coord_systems.PolarStereographic):
-                    if cs.ellipsoid:
-                        add_ellipsoid(cs.ellipsoid)
-                    cf_var_grid.latitude_of_projection_origin = cs.central_lat
-                    cf_var_grid.straight_vertical_longitude_from_pole = cs.central_lon
-                    cf_var_grid.false_easting = cs.false_easting
-                    cf_var_grid.false_northing = cs.false_northing
-                    # Only one of these should be set
-                    if cs.true_scale_lat is not None:
-                        cf_var_grid.true_scale_lat = cs.true_scale_lat
-                    elif cs.scale_factor_at_projection_origin is not None:
-                        cf_var_grid.scale_factor_at_projection_origin = (
-                            cs.scale_factor_at_projection_origin
-                        )
-                    else:
-                        cf_var_grid.scale_factor_at_projection_origin = 1.0
-
-                # stereo
-                elif isinstance(cs, iris.coord_systems.Stereographic):
-                    if cs.ellipsoid:
-                        add_ellipsoid(cs.ellipsoid)
-                    cf_var_grid.longitude_of_projection_origin = cs.central_lon
-                    cf_var_grid.latitude_of_projection_origin = cs.central_lat
-                    cf_var_grid.false_easting = cs.false_easting
-                    cf_var_grid.false_northing = cs.false_northing
-                    # Only one of these should be set
-                    if cs.true_scale_lat is not None:
-                        msg = (
-                            "It is not valid CF to save a true_scale_lat for "
-                            "a Stereographic grid mapping."
-                        )
-                        raise ValueError(msg)
-                    elif cs.scale_factor_at_projection_origin is not None:
-                        cf_var_grid.scale_factor_at_projection_origin = (
-                            cs.scale_factor_at_projection_origin
-                        )
-                    else:
-                        cf_var_grid.scale_factor_at_projection_origin = 1.0
-
-                # osgb (a specific tmerc)
-                elif isinstance(cs, iris.coord_systems.OSGB):
-                    warnings.warn(
-                        "OSGB coordinate system not yet handled",
-                        category=iris.warnings.IrisSaveWarning,
-                    )
-
-                # lambert azimuthal equal area
-                elif isinstance(cs, iris.coord_systems.LambertAzimuthalEqualArea):
-                    if cs.ellipsoid:
-                        add_ellipsoid(cs.ellipsoid)
-                    cf_var_grid.longitude_of_projection_origin = (
-                        cs.longitude_of_projection_origin
-                    )
-                    cf_var_grid.latitude_of_projection_origin = (
-                        cs.latitude_of_projection_origin
-                    )
-                    cf_var_grid.false_easting = cs.false_easting
-                    cf_var_grid.false_northing = cs.false_northing
-
-                # albers conical equal area
-                elif isinstance(cs, iris.coord_systems.AlbersEqualArea):
-                    if cs.ellipsoid:
-                        add_ellipsoid(cs.ellipsoid)
-                    cf_var_grid.longitude_of_central_meridian = (
-                        cs.longitude_of_central_meridian
-                    )
-                    cf_var_grid.latitude_of_projection_origin = (
-                        cs.latitude_of_projection_origin
-                    )
-                    cf_var_grid.false_easting = cs.false_easting
-                    cf_var_grid.false_northing = cs.false_northing
-                    cf_var_grid.standard_parallel = cs.standard_parallels
-
-                # vertical perspective
-                elif isinstance(cs, iris.coord_systems.VerticalPerspective):
-                    if cs.ellipsoid:
-                        add_ellipsoid(cs.ellipsoid)
-                    cf_var_grid.longitude_of_projection_origin = (
-                        cs.longitude_of_projection_origin
-                    )
-                    cf_var_grid.latitude_of_projection_origin = (
-                        cs.latitude_of_projection_origin
-                    )
-                    cf_var_grid.false_easting = cs.false_easting
-                    cf_var_grid.false_northing = cs.false_northing
-                    cf_var_grid.perspective_point_height = cs.perspective_point_height
-
-                # geostationary
-                elif isinstance(cs, iris.coord_systems.Geostationary):
-                    if cs.ellipsoid:
-                        add_ellipsoid(cs.ellipsoid)
-                    cf_var_grid.longitude_of_projection_origin = (
-                        cs.longitude_of_projection_origin
-                    )
-                    cf_var_grid.latitude_of_projection_origin = (
-                        cs.latitude_of_projection_origin
-                    )
-                    cf_var_grid.false_easting = cs.false_easting
-                    cf_var_grid.false_northing = cs.false_northing
-                    cf_var_grid.perspective_point_height = cs.perspective_point_height
-                    cf_var_grid.sweep_angle_axis = cs.sweep_angle_axis
-
-                # oblique mercator (and rotated variant)
-                # Use duck-typing over isinstance() - subclasses (i.e.
-                #  RotatedMercator) upset mock tests.
-                elif getattr(cs, "grid_mapping_name", None) == "oblique_mercator":
-                    # RotatedMercator subclasses ObliqueMercator, and RM
-                    #  instances are implicitly saved as OM due to inherited
-                    #  properties. This is correct because CF 1.11 is removing
-                    #  all mention of RM.
-                    if cs.ellipsoid:
-                        add_ellipsoid(cs.ellipsoid)
-                    cf_var_grid.azimuth_of_central_line = cs.azimuth_of_central_line
-                    cf_var_grid.latitude_of_projection_origin = (
-                        cs.latitude_of_projection_origin
-                    )
-                    cf_var_grid.longitude_of_projection_origin = (
-                        cs.longitude_of_projection_origin
-                    )
-                    cf_var_grid.false_easting = cs.false_easting
-                    cf_var_grid.false_northing = cs.false_northing
-                    cf_var_grid.scale_factor_at_projection_origin = (
-                        cs.scale_factor_at_projection_origin
-                    )
-
-                # other
-                else:
-                    warnings.warn(
-                        "Unable to represent the horizontal "
-                        "coordinate system. The coordinate system "
-                        "type %r is not yet implemented." % type(cs),
-                        category=iris.warnings.IrisSaveWarning,
-                    )
-
                 self._coord_systems.append(cs)
 
-            # Refer to grid var
-            _setncattr(cf_var_cube, "grid_mapping", cs.grid_mapping_name)
+            # create the `grid_mapping` attribute for the data variable:
+            if cube.extended_grid_mapping:
+                # Order the coordinates as per the order in the CRS/WKT string.
+                # (We should only ever have a coordinate system for horizontal
+                # spatial coords, so check for east/north directions)
+                ordered_coords = []
+                for ax_info in cs.as_cartopy_crs().axis_info:
+                    try:
+                        match ax_info.direction.lower():
+                            case "east":
+                                ordered_coords.append(
+                                    cube.coord(axis="X", coord_system=cs)
+                                )
+                            case "north":
+                                ordered_coords.append(
+                                    cube.coord(axis="Y", coord_system=cs)
+                                )
+                            case _:
+                                msg = (
+                                    f"Can't handle axis direction {ax_info.direction!r}"
+                                )
+                                raise NotImplementedError(msg)
+                    except iris.exceptions.CoordinateNotFoundError as e:
+                        msg = (
+                            f"Failed to assign coordinate for {ax_info.name} axis of "
+                            f"coordinate system {cs.grid_mapping_name}: {str(e)}"
+                        )
+                        warnings.warn(msg, category=iris.warnings.IrisSaveWarning)
+
+                        # fall back to simple grid mapping (single crs entry for DimCoord only)
+                        matched_all_coords = False
+
+                # Get variable names, and store them if necessary:
+                cfvar_names = []
+                for coord in ordered_coords:
+                    cfvar = self._name_coord_map.name(coord)
+                    if not cfvar:
+                        # not found - create and store it:
+                        cfvar = self._get_element_variable_name(cube, coord)
+                        self._name_coord_map.append(
+                            cfvar, self._get_element_variable_name(cube, coord)
+                        )
+                    cfvar_names.append(cfvar)
+
+                coord_string = " ".join(cfvar_names)
+                grid_mappings[cs.grid_mapping_name] = coord_string
+
+        # Refer to grid var
+        if len(coord_systems):
+            grid_mapping = None
+            if cube.extended_grid_mapping:
+                if matched_all_coords:
+                    grid_mapping = " ".join(
+                        f"{cs_name}: {cs_coords}"
+                        for cs_name, cs_coords in grid_mappings.items()
+                    )
+                else:
+                    # We didn't match all coords required for grid mapping, default to
+                    # single coordinate system for DimCoords, if set.
+                    for ax in ["x", "y"]:
+                        try:
+                            if dim_cs := cube.coord(
+                                axis=ax, dim_coords=True
+                            ).coord_system:
+                                grid_mapping = dim_cs.grid_mapping_name
+                                break
+                        except iris.exceptions.CoordinateNotFoundError:
+                            pass
+            else:
+                # Not using extended_grid_mapping: only ever be on cs in this case:
+                grid_mapping = coord_systems[0].grid_mapping_name
+
+            if grid_mapping:
+                _setncattr(cf_var_cube, "grid_mapping", grid_mapping)
+
+    _DATALESS_ATTRNAME = "iris_dataless_cube"
+    _DATALESS_DTYPE = np.dtype("u1")
+    _DATALESS_FILLVALUE = 127
 
     def _create_cf_data_variable(
         self,
@@ -2110,22 +2425,24 @@ class Saver:
         fill_value : optional
             See :func:`iris.fileformats.netcdf.Saver.write`.
 
+        Returns
+        -------
+        The newly created CF-netCDF data variable.
+
         Notes
         -----
         All other keywords are passed through to the dataset's `createVariable`
         method.
 
-        Returns
-        -------
-        The newly created CF-netCDF data variable.
-
         """
         # TODO: when iris.FUTURE.save_split_attrs is removed, the 'local_keys' arg can
         # be removed.
         # Get the values in a form which is valid for the file format.
-        data = self._ensure_valid_dtype(cube.core_data(), "cube", cube)
+        is_dataless = cube.is_dataless()
 
-        if packing:
+        packing_controls = None
+        if packing and not is_dataless:
+            data = self._ensure_valid_dtype(cube.core_data(), "cube", cube)
             if isinstance(packing, dict):
                 if "dtype" not in packing:
                     msg = "The dtype attribute is required for packing."
@@ -2163,47 +2480,30 @@ class Saver:
                         add_offset = (cmax + cmin) / 2
                     else:
                         add_offset = cmin + 2 ** (n - 1) * scale_factor
-        else:
-            dtype = data.dtype.newbyteorder("=")
 
-        def set_packing_ncattrs(cfvar):
-            """Set netCDF packing attributes.
-
-            NOTE: cfvar needs to be a _thread_safe_nc._ThreadSafeWrapper subclass.
-
-            """
-            assert hasattr(cfvar, "THREAD_SAFE_FLAG")
-            if packing:
-                if scale_factor:
-                    _setncattr(cfvar, "scale_factor", scale_factor)
-                if add_offset:
-                    _setncattr(cfvar, "add_offset", add_offset)
-
-        cf_name = self._get_cube_variable_name(cube)
-        while cf_name in self._dataset.variables:
-            cf_name = self._increment_name(cf_name)
+            packing_controls = {
+                "dtype": dtype,
+                "attributes": [
+                    ("scale_factor", scale_factor),
+                    ("add_offset", add_offset),
+                ],
+            }
 
         # Create the cube CF-netCDF data variable with data payload.
-        cf_var = self._dataset.createVariable(
-            cf_name, dtype, dimension_names, fill_value=fill_value, **kwargs
+        cf_name = self._create_generic_cf_array_var(
+            cube,
+            dimension_names,
+            cube,
+            element_dims=dimension_names,
+            fill_value=fill_value,
+            compression_kwargs=kwargs,
+            packing_controls=packing_controls,
+            is_dataless=is_dataless,
         )
+        cf_var = self._dataset.variables[cf_name]
 
-        set_packing_ncattrs(cf_var)
-        self._lazy_stream_data(data=data, cf_var=cf_var)
-
-        if cube.standard_name:
-            _setncattr(cf_var, "standard_name", cube.standard_name)
-
-        if cube.long_name:
-            _setncattr(cf_var, "long_name", cube.long_name)
-
-        if cube.units.is_udunits():
-            _setncattr(cf_var, "units", str(cube.units))
-
-        # Add the CF-netCDF calendar attribute.
-        if cube.units.calendar:
-            _setncattr(cf_var, "calendar", cube.units.calendar)
-
+        # Set general attrs: NB this part is cube-specific (not the same for components)
+        # - so 'set_cf_var_attributes' *doesn't* set these, if element is a Cube
         if iris.FUTURE.save_split_attrs:
             attr_names = cube.attributes.locals.keys()
         else:
@@ -2212,27 +2512,37 @@ class Saver:
                 local_keys = set()
             else:
                 local_keys = set(local_keys)
-            local_keys.update(_CF_DATA_ATTRS, _UKMO_DATA_ATTRS)
+            local_keys.update(_CF_DATA_ATTRS, _UKMO_DATA_ATTRS, ["GRIB_PARAM"])
 
             # Add any cube attributes whose keys are in local_keys as
             # CF-netCDF data variable attributes.
             attr_names = set(cube.attributes).intersection(local_keys)
 
+        # Write all the variable attributes
         for attr_name in sorted(attr_names):
-            # Do not output 'conventions' attribute.
-            if attr_name.lower() == "conventions":
+            # Do not output 'conventions' or extended grid mapping attribute.
+            if attr_name.lower() in ["conventions", "iris_extended_grid_mapping"]:
                 continue
 
             value = cube.attributes[attr_name]
 
-            if attr_name == "STASH":
-                # Adopting provisional Metadata Conventions for representing MO
-                # Scientific Data encoded in NetCDF Format.
-                attr_name = "um_stash_source"
-                value = str(value)
-
-            if attr_name == "ukmo__process_flags":
-                value = " ".join([x.replace(" ", "_") for x in value])
+            # Convert any "managed" attributes. These convert between an internal
+            #  convenience representation and what is actually stored in the file.
+            handler = ATTRIBUTE_HANDLERS.get(attr_name)
+            if handler is not None:
+                try:
+                    attr_name, value = handler.encode_object(value)
+                except (TypeError, ValueError):
+                    string_value = str(value)
+                    msg = (
+                        f"Invalid value in managed '{attr_name}' attribute: {value!r}. "
+                        f"File attribute set to raw (string) value {string_value!r}."
+                    )
+                    warnings.warn(msg, category=iris.warnings.IrisSaveWarning)
+                    # Resolve by setting the **Iris** attr-name to the "raw" string repr
+                    # NB we expect the default written name to be the last listed
+                    attr_name = handler.iris_name
+                    value = string_value
 
             if attr_name in _CF_GLOBAL_ATTRS:
                 msg = (
@@ -2243,6 +2553,10 @@ class Saver:
                 warnings.warn(msg, category=iris.warnings.IrisCfSaveWarning)
 
             _setncattr(cf_var, attr_name, value)
+
+        # Add the 'dataless' marker if needed
+        if is_dataless:
+            _setncattr(cf_var, self._DATALESS_ATTRNAME, "true")
 
         # Create the CF-netCDF data variable cell method attribute.
         cell_methods = self._create_cf_cell_methods(cube, dimension_names)
@@ -2285,7 +2599,7 @@ class Saver:
     def _lazy_stream_data(
         self,
         data: np.typing.ArrayLike,
-        cf_var: CFVariable,
+        cf_var: threadsafe_nc.VariableWrapper,
     ) -> None:
         if hasattr(data, "shape") and data.shape == (1,) + cf_var.shape:
             # (Don't do this check for string data).
@@ -2307,16 +2621,24 @@ class Saver:
         else:
             doing_delayed_save = is_lazy_data(data)
             if doing_delayed_save:
+                if self._is_nczarr:
+                    # NCZarr cannot be reopened for deferred writes.
+                    # Collect here; da.store() will be called in __exit__.
+                    self._nczarr_writes.append((data, cf_var))
+                    return
+
                 # save lazy data with a delayed operation.  For now, we just record the
                 # necessary information -- a single, complete delayed action is constructed
                 # later by a call to delayed_completion().
                 def store(
                     data: np.typing.ArrayLike,
-                    cf_var: CFVariable,
+                    cf_var: threadsafe_nc.VariableWrapper,
                 ) -> None:
                     # Create a data-writeable object that we can stream into, which
                     # encapsulates the file to be opened + variable to be written.
-                    write_wrapper = _thread_safe_nc.NetCDFWriteProxy(
+                    # Note: we do *not* support selectable string encoding for writes,
+                    # so this never needs to be a _thread_safe_nc.NetCDFWriteProxy.
+                    write_wrapper = bytecoding_datasets.EncodedNetCDFWriteProxy(
                         self.filepath, cf_var, self.file_write_lock
                     )
                     # Add to the list of delayed writes, used in delayed_completion().
@@ -2326,7 +2648,7 @@ class Saver:
                 # Real data is always written directly, i.e. not via lazy save.
                 def store(
                     data: np.typing.ArrayLike,
-                    cf_var: CFVariable,
+                    cf_var: threadsafe_nc.VariableWrapper,
                 ) -> None:
                     cf_var[:] = data  # type: ignore[index]
 
@@ -2377,7 +2699,7 @@ class Saver:
             raise ValueError(msg)
 
         # Complete the saves now
-        self.delayed_completion().compute()
+        dask.compute(self.delayed_completion())
 
 
 def save(
@@ -2398,7 +2720,13 @@ def save(
     fill_value=None,
     compute=True,
 ):
-    r"""Save cube(s) to a netCDF file, given the cube and the filename.
+    r"""Save cube(s) to a NetCDF file, given the cube and the filename.
+
+    Also supports Zarr files in the NcZarr URL format, e.g.
+    ``file:///path/to/file#mode=nczarr,file``. Note that NcZarr is limited to
+    Zarr Storage Specification Version 2. See the
+    `NcZarr docs <https://docs.unidata.ucar.edu/nug/current/nczarr_head.html>`
+    for more.
 
     * Iris will write CF 1.7 compliant NetCDF files.
     * **If split-attribute saving is disabled**, i.e.
@@ -2424,7 +2752,7 @@ def save(
         A :class:`iris.cube.Cube`, :class:`iris.cube.CubeList` or other
         iterable of cubes to be saved to a netCDF file.
     filename : str
-        Name of the netCDF file to save the cube(s).
+        Name of the NetCDF file or NcZarr URL to save the cube(s).
         **Or** an open, writeable :class:`netCDF4.Dataset`, or compatible object.
 
         .. note::
@@ -2470,7 +2798,7 @@ def save(
         Used to manually specify the HDF5 chunksizes for each dimension of the
         variable. A detailed discussion of HDF chunking and I/O performance is
         available
-        `here <https://www.esrl.noaa.gov/psd/data/gridded/conventions/cdc_netcdf_standard.shtml>`__.
+        `here <https://docs.unidata.ucar.edu/nug/current/netcdf_perf_chunking.html>`__.
         Basically, you want the chunk size for each dimension to match as
         closely as possible the size of the data block that users will read
         from the file. `chunksizes` cannot be set if `contiguous=True`.
@@ -2499,8 +2827,8 @@ def save(
         describes a numpy integer dtype (i.e. 'i2', 'short', 'u4') or a dict
         of packing parameters as described below or an iterable of such types,
         strings, or dicts. This provides support for netCDF data packing as
-        described in
-        `here <https://www.esrl.noaa.gov/psd/data/gridded/conventions/cdc_netcdf_standard.shtml>`__
+        described in the
+        `metadata conventions <https://docs.unidata.ucar.edu/nug/current/attribute_conventions.html>`__
         If this argument is a type (or type string), appropriate values of
         scale_factor and add_offset will be automatically calculated based
         on `cube.data` and possible masking. For more control, pass a dict with
@@ -2586,13 +2914,7 @@ def save(
         # Fnd any global attributes which are not the same on *all* cubes.
         def attr_values_equal(val1, val2):
             # An equality test which also works when some values are numpy arrays (!)
-            # As done in :meth:`iris.common.mixin.LimitedAttributeDict.__eq__`.
-            match = val1 == val2
-            try:
-                match = bool(match)
-            except ValueError:
-                match = match.all()
-            return match
+            return iris.util._attribute_equal(val1, val2)
 
         cube0 = cubes[0]
         invalid_globals = set(
@@ -2679,7 +3001,9 @@ def save(
             common_keys.intersection_update(keys)
             different_value_keys = []
             for key in common_keys:
-                if np.any(attributes[key] != cube.attributes[key]):
+                if not iris.util._attribute_equal(
+                    attributes[key], cube.attributes[key]
+                ):
                     different_value_keys.append(key)
             common_keys.difference_update(different_value_keys)
             local_keys.update(different_value_keys)
@@ -2745,16 +3069,16 @@ def save(
         for cube, packspec, fill_value in zip(cubes, packspecs, fill_values):
             sman.write(
                 cube,
-                local_keys,
-                unlimited_dimensions,
-                zlib,
-                complevel,
-                shuffle,
-                fletcher32,
-                contiguous,
-                chunksizes,
-                endian,
-                least_significant_digit,
+                local_keys=local_keys,
+                unlimited_dimensions=unlimited_dimensions,
+                zlib=zlib,
+                complevel=complevel,
+                shuffle=shuffle,
+                fletcher32=fletcher32,
+                contiguous=contiguous,
+                chunksizes=chunksizes,
+                endian=endian,
+                least_significant_digit=least_significant_digit,
                 packing=packspec,
                 fill_value=fill_value,
             )
@@ -2798,7 +3122,17 @@ def save(
     return result
 
 
-def save_mesh(mesh, filename, netcdf_format="NETCDF4"):
+def save_mesh(
+    mesh,
+    filename,
+    /,
+    *,
+    complevel=4,
+    fletcher32=False,
+    netcdf_format="NETCDF4",
+    shuffle=True,
+    zlib=False,
+):
     """Save mesh(es) to a netCDF file.
 
     Parameters
@@ -2807,15 +3141,36 @@ def save_mesh(mesh, filename, netcdf_format="NETCDF4"):
         Mesh(es) to save.
     filename : str
         Name of the netCDF file to create.
+    complevel : int, default=4
+        An integer between 1 and 9 describing the level of compression
+        desired. Ignored if ``zlib=False``.
+    fletcher32 : bool, default=False
+        If ``True``, the Fletcher32 HDF5 checksum algorithm is activated to
+        detect errors.
     netcdf_format : str, default="NETCDF4"
-        Underlying netCDF file format, one of 'NETCDF4', 'NETCDF4_CLASSIC',
-        'NETCDF3_CLASSIC' or 'NETCDF3_64BIT'. Default is 'NETCDF4' format.
+        Underlying netCDF file format, one of ``NETCDF4``, ``NETCDF4_CLASSIC``,
+        ``NETCDF3_CLASSIC`` or ``NETCDF3_64BIT``. Default is ``NETCDF4`` format.
+    shuffle : bool, default=True
+        If ``True``, the HDF5 shuffle filter will be applied before
+        compressing the data. This significantly improves compression.
+        Ignored if ``zlib=False``.
+    zlib : bool, default=False
+        If ``True``, the data will be compressed in the netCDF file using
+        gzip compression.
 
     """
     if isinstance(mesh, typing.Iterable):
         meshes = mesh
     else:
         meshes = [mesh]
+
+    # Group the generic compression keyword arguments together.
+    compression_kwargs = {
+        "complevel": complevel,
+        "fletcher32": fletcher32,
+        "shuffle": shuffle,
+        "zlib": zlib,
+    }
 
     # Initialise Manager for saving
     with Saver(filename, netcdf_format) as sman:
@@ -2828,7 +3183,7 @@ def save_mesh(mesh, filename, netcdf_format="NETCDF4"):
             sman._create_cf_dimensions(cube=None, dimension_names=mesh_dimensions)
 
             # Create the mesh components.
-            sman._add_mesh(mesh)
+            sman._add_mesh(mesh, compression_kwargs=compression_kwargs)
 
         # Add a conventions attribute.
         # TODO: add 'UGRID' to conventions, when this is agreed with CF ?
